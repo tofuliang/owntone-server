@@ -411,6 +411,32 @@ spotify {
 #	album_override = false
 }
 
+# Subsonic configuration
+subsonic {
+	# Enable Subsonic support
+#	enabled = false
+
+	# Subsonic server URL (required if enabled)
+#	server_url = "https://demo.subsonic.org"
+
+	# Subsonic username (required if enabled)
+#	username = "guest"
+
+	# Subsonic password (required if enabled)
+#	password = "guest"
+
+	# Subsonic API version (optional, defaults to 1.16.1)
+#	api_version = "1.16.1"
+
+	# Audio offset in milliseconds (optional)
+	# Use this to adjust for server latency
+#	offset_ms = 0
+
+	# Use token authentication (optional, defaults to true)
+	# Set to false to use plaintext password authentication
+#	use_token_auth = true
+} 
+
 # RCP/Roku Soundbridge output settings
 # (make sure you get the capitalization of the device name right)
 #rcp "My SoundBridge device" {

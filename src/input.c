@@ -61,6 +61,7 @@ extern struct input_definition input_spotify;
 #ifdef SPOTIFY_LIBSPOTIFY
 extern struct input_definition input_libspotify;
 #endif
+extern struct input_definition input_subsonic;
 
 // Must be in sync with enum input_types
 static struct input_definition *inputs[] = {
@@ -74,6 +75,7 @@ static struct input_definition *inputs[] = {
 #ifdef SPOTIFY_LIBSPOTIFY
     &input_libspotify,
 #endif
+    &input_subsonic,
     NULL
 };
 
@@ -184,6 +186,11 @@ map_data_kind(int data_kind)
 	  return INPUT_TYPE_LIBSPOTIFY;
 #endif
 	return -1;
+
+      case DATA_KIND_SUBSONIC:
+        if (!inputs[INPUT_TYPE_SUBSONIC]->disabled)
+          return INPUT_TYPE_SUBSONIC;
+        return -1;
 
       default:
 	return -1;

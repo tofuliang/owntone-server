@@ -1,4 +1,3 @@
-
 sbin_PROGRAMS = owntone
 
 if COND_SPOTIFY
@@ -55,7 +54,7 @@ GPERF_SRC = $(GPERF_FILES:.gperf=_hash.h)
 
 LEXER_SRC  = parsers/daap_lexer.l parsers/smartpl_lexer.l parsers/rsp_lexer.l parsers/mpd_lexer.l
 PARSER_SRC = parsers/daap_parser.y parsers/smartpl_parser.y parsers/rsp_parser.y parsers/mpd_parser.y
-
+SUBSONIC_SRC = library/subsonic_webapi.c library/subsonic_webapi.h inputs/subsonic.c inputs/subsonic.h
 # This flag is given to Bison and tells it to produce headers. Note that
 # automake recognizes this flag too, and has special logic around it, so don't
 # change it to compound arguments (so for instance no "-dv"). I'm also not sure
@@ -125,6 +124,7 @@ owntone_SOURCES = main.c \
 	evrtsp/rtsp.c evrtsp/evrtsp.h evrtsp/rtsp-internal.h evrtsp/log.h \
 	evthr.c evthr.h \
 	$(SPOTIFY_SRC) \
+	$(SUBSONIC_SRC) \
 	$(LASTFM_SRC) \
 	listenbrainz.c listenbrainz.h \
 	$(MPD_SRC) \

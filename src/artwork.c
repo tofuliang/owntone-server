@@ -18,35 +18,36 @@
  */
 
 #ifdef HAVE_CONFIG_H
-# include <config.h>
+#include <config.h>
 #endif
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <stdbool.h>
-#include <unistd.h>
-#include <string.h>
-#include <strings.h>
-#include <sys/types.h>
-#include <sys/stat.h>
 #include <fcntl.h>
 #include <limits.h>
 #include <pthread.h>
+#include <stdbool.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <strings.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <unistd.h>
 
+#include "cache.h"
+#include "conffile.h"
 #include "db.h"
+#include "http.h"
+#include "logger.h"
 #include "misc.h"
 #include "misc_json.h"
-#include "logger.h"
-#include "conffile.h"
 #include "settings.h"
-#include "cache.h"
-#include "http.h"
 #include "transcode.h"
 
 #include "artwork.h"
+#include "library/subsonic_webapi.h"
 
 #ifdef SPOTIFY
-# include "library/spotify_webapi.h"
+#include "library/spotify_webapi.h"
 #endif
 
 /* This artwork module will look for artwork by consulting a set of sources one
@@ -73,11 +74,10 @@
 #define ONLINE_SEARCH_COOLDOWN_TIME 3600
 #define ONLINE_SEARCH_FAILURES_MAX 5
 
-enum artwork_cache
-{
-  NEVER = 0,       // No caching of any results
-  ON_SUCCESS = 1,  // Cache if artwork found
-  ON_FAILURE = 2,  // Cache if artwork not found (so we don't keep asking)
+enum artwork_cache {
+  NEVER = 0,      // No caching of any results
+  ON_SUCCESS = 1, // Cache if artwork found
+  ON_FAILURE = 2, // Cache if artwork not found (so we don't keep asking)
 };
 
 // Input data to handlers, requested width, height and format. Can be set to
@@ -187,179 +187,203 @@ struct online_source {
 
 /* File extensions that we look for or accept
  */
-static const char *cover_extension[] =
-  {
-    "jpg", "png",
-  };
+static const char *cover_extension[] = {
+  "jpg",
+  "png",
+};
 
 static pthread_mutex_t artwork_cache_stash_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 /* ----------------- DECLARE AND CONFIGURE SOURCE HANDLERS ----------------- */
 
 /* Forward - group handlers */
-static int source_group_cache_get(struct artwork_ctx *ctx);
-static int source_group_dir_get(struct artwork_ctx *ctx);
+static int
+source_group_cache_get(struct artwork_ctx *ctx);
+static int
+source_group_dir_get(struct artwork_ctx *ctx);
 /* Forward - item handlers */
-static int source_item_cache_get(struct artwork_ctx *ctx);
-static int source_item_embedded_get(struct artwork_ctx *ctx);
-static int source_item_own_get(struct artwork_ctx *ctx);
-static int source_item_artwork_url_get(struct artwork_ctx *ctx);
-static int source_item_pipe_get(struct artwork_ctx *ctx);
-static int source_item_spotifywebapi_track_get(struct artwork_ctx *ctx);
-static int source_item_ownpl_get(struct artwork_ctx *ctx);
-static int source_item_spotifywebapi_search_get(struct artwork_ctx *ctx);
-static int source_item_discogs_get(struct artwork_ctx *ctx);
-static int source_item_coverartarchive_get(struct artwork_ctx *ctx);
+static int
+source_item_cache_get(struct artwork_ctx *ctx);
+static int
+source_item_embedded_get(struct artwork_ctx *ctx);
+static int
+source_item_own_get(struct artwork_ctx *ctx);
+static int
+source_item_artwork_url_get(struct artwork_ctx *ctx);
+static int
+source_item_pipe_get(struct artwork_ctx *ctx);
+static int
+source_item_spotifywebapi_track_get(struct artwork_ctx *ctx);
+static int
+source_item_subsonicwebapi_track_get(struct artwork_ctx *ctx);
+static int
+source_item_ownpl_get(struct artwork_ctx *ctx);
+static int
+source_item_spotifywebapi_search_get(struct artwork_ctx *ctx);
+static int
+source_item_discogs_get(struct artwork_ctx *ctx);
+static int
+source_item_coverartarchive_get(struct artwork_ctx *ctx);
 
 /* List of sources that can provide artwork for a group (i.e. usually an album
  * identified by a persistentid). The source handlers will be called in the
  * order of this list. Must be terminated by a NULL struct.
  */
-static struct artwork_source artwork_group_source[] =
+static struct artwork_source artwork_group_source[] = {
   {
-    {
-      .name = "cache",
-      .handler = source_group_cache_get,
-      .cache = ON_FAILURE,
-    },
-    {
-      .name = "directory",
-      .handler = source_group_dir_get,
-      .cache = ON_SUCCESS | ON_FAILURE,
-    },
-    {
-      .name = NULL,
-      .handler = NULL,
-      .cache = 0,
-    }
-  };
+   .name = "cache",
+   .handler = source_group_cache_get,
+   .cache = ON_FAILURE,
+   },
+  {
+   .name = "directory",
+   .handler = source_group_dir_get,
+   .cache = ON_SUCCESS | ON_FAILURE,
+   },
+  {
+   .name = NULL,
+   .handler = NULL,
+   .cache = 0,
+   }
+};
 
 /* List of sources that can provide artwork for an item (a track characterized
  * by a dbmfi). The source handlers will be called in the order of this list.
  * The handler will only be called if the data_kind matches. Must be terminated
  * by a NULL struct.
  */
-static struct artwork_source artwork_item_source[] =
+static struct artwork_source artwork_item_source[] = {
   {
-    {
-      .name = "cache",
-      .handler = source_item_cache_get,
-      .data_kinds = (1 << DATA_KIND_FILE) | (1 << DATA_KIND_SPOTIFY),
-      .media_kinds = MEDIA_KIND_ALL,
-      .cache = ON_FAILURE,
-    },
-    {
-      .name = "embedded",
-      .handler = source_item_embedded_get,
-      .data_kinds = (1 << DATA_KIND_FILE) | (1 << DATA_KIND_HTTP),
-      .media_kinds = MEDIA_KIND_ALL,
-      .cache = ON_SUCCESS | ON_FAILURE,
-    },
-    {
-      .name = "own",
-      .handler = source_item_own_get,
-      .data_kinds = (1 << DATA_KIND_FILE),
-      .media_kinds = MEDIA_KIND_ALL,
-      .cache = ON_SUCCESS | ON_FAILURE,
-    },
-    {
-      .name = "stream",
-      .handler = source_item_artwork_url_get,
-      .data_kinds = (1 << DATA_KIND_HTTP) | (1 << DATA_KIND_PIPE),
-      .media_kinds = MEDIA_KIND_MUSIC,
-      .cache = NEVER,
-    },
-    {
-      .name = "pipe",
-      .handler = source_item_pipe_get,
-      .data_kinds = (1 << DATA_KIND_PIPE),
-      .media_kinds = MEDIA_KIND_ALL,
-      .cache = NEVER,
-    },
-    {
-      .name = "Spotify track web api",
-      .handler = source_item_spotifywebapi_track_get,
-      .data_kinds = (1 << DATA_KIND_SPOTIFY),
-      .media_kinds = MEDIA_KIND_ALL,
-      .cache = ON_SUCCESS | ON_FAILURE,
-    },
-    {
-      // Note that even though caching is set for this handler, it will in most
+   .name = "cache",
+   .handler = source_item_cache_get,
+   .data_kinds = (1 << DATA_KIND_FILE) | (1 << DATA_KIND_SPOTIFY),
+   .media_kinds = MEDIA_KIND_ALL,
+   .cache = ON_FAILURE,
+   },
+  {
+   .name = "embedded",
+   .handler = source_item_embedded_get,
+   .data_kinds = (1 << DATA_KIND_FILE) | (1 << DATA_KIND_HTTP),
+   .media_kinds = MEDIA_KIND_ALL,
+   .cache = ON_SUCCESS | ON_FAILURE,
+   },
+  {
+   .name = "own",
+   .handler = source_item_own_get,
+   .data_kinds = (1 << DATA_KIND_FILE),
+   .media_kinds = MEDIA_KIND_ALL,
+   .cache = ON_SUCCESS | ON_FAILURE,
+   },
+  {
+   .name = "stream",
+   .handler = source_item_artwork_url_get,
+   .data_kinds = (1 << DATA_KIND_HTTP) | (1 << DATA_KIND_PIPE),
+   .media_kinds = MEDIA_KIND_MUSIC,
+   .cache = NEVER,
+   },
+  {
+   .name = "pipe",
+   .handler = source_item_pipe_get,
+   .data_kinds = (1 << DATA_KIND_PIPE),
+   .media_kinds = MEDIA_KIND_ALL,
+   .cache = NEVER,
+   },
+  {
+   .name = "Subsonic web api",
+   .handler = source_item_subsonicwebapi_track_get,
+   .data_kinds = (1 << DATA_KIND_SUBSONIC),
+   .media_kinds = MEDIA_KIND_MUSIC,
+   .cache = NEVER,
+   },
+  {
+   .name = "Spotify track web api",
+   .handler = source_item_spotifywebapi_track_get,
+   .data_kinds = (1 << DATA_KIND_SUBSONIC),
+   .media_kinds = MEDIA_KIND_ALL,
+   .cache = ON_SUCCESS | ON_FAILURE,
+   },
+  {
+   // Note that even though caching is set for this handler, it will in most
       // cases not happen because source_item_artwork_url_get() comes before
       // and has NEVER. This is intentional because this handler is also a
       // backup for when we don't get anything from the stream.
       .name = "playlist own",
-      .handler = source_item_ownpl_get,
-      .data_kinds = (1 << DATA_KIND_HTTP),
-      .media_kinds = MEDIA_KIND_ALL,
-      .cache = ON_SUCCESS | ON_FAILURE,
-    },
-    {
-      .name = "Spotify search web api (files)",
-      .handler = source_item_spotifywebapi_search_get,
-      .data_kinds = (1 << DATA_KIND_FILE),
-      .media_kinds = MEDIA_KIND_MUSIC,
-      .cache = ON_SUCCESS | ON_FAILURE,
-    },
-    {
-      .name = "Spotify search web api (streams)",
-      .handler = source_item_spotifywebapi_search_get,
-      .data_kinds = (1 << DATA_KIND_HTTP) | (1 << DATA_KIND_PIPE),
-      .media_kinds = MEDIA_KIND_MUSIC,
-      .cache = NEVER,
-    },
-    {
-      .name = "Discogs (files)",
-      .handler = source_item_discogs_get,
-      .data_kinds = (1 << DATA_KIND_FILE),
-      .media_kinds = MEDIA_KIND_MUSIC,
-      .cache = ON_SUCCESS | ON_FAILURE,
-    },
-    {
-      .name = "Discogs (streams)",
-      .handler = source_item_discogs_get,
-      .data_kinds = (1 << DATA_KIND_HTTP) | (1 << DATA_KIND_PIPE),
-      .media_kinds = MEDIA_KIND_MUSIC,
-      .cache = NEVER,
-    },
-    {
-      // The Cover Art Archive seems rather slow, so low priority
+   .handler = source_item_ownpl_get,
+   .data_kinds = (1 << DATA_KIND_HTTP),
+   .media_kinds = MEDIA_KIND_ALL,
+   .cache = ON_SUCCESS | ON_FAILURE,
+   },
+  {
+   .name = "Spotify search web api (files)",
+   .handler = source_item_spotifywebapi_search_get,
+   .data_kinds = (1 << DATA_KIND_FILE),
+   .media_kinds = MEDIA_KIND_MUSIC,
+   .cache = ON_SUCCESS | ON_FAILURE,
+   },
+  {
+   .name = "Spotify search web api (streams)",
+   .handler = source_item_spotifywebapi_search_get,
+   .data_kinds = (1 << DATA_KIND_HTTP) | (1 << DATA_KIND_PIPE),
+   .media_kinds = MEDIA_KIND_MUSIC,
+   .cache = NEVER,
+   },
+  {
+   .name = "Discogs (files)",
+   .handler = source_item_discogs_get,
+   .data_kinds = (1 << DATA_KIND_FILE),
+   .media_kinds = MEDIA_KIND_MUSIC,
+   .cache = ON_SUCCESS | ON_FAILURE,
+   },
+  {
+   .name = "Discogs (streams)",
+   .handler = source_item_discogs_get,
+   .data_kinds = (1 << DATA_KIND_HTTP) | (1 << DATA_KIND_PIPE),
+   .media_kinds = MEDIA_KIND_MUSIC,
+   .cache = NEVER,
+   },
+  {
+   // The Cover Art Archive seems rather slow, so low priority
       .name = "Cover Art Archive (files)",
-      .handler = source_item_coverartarchive_get,
-      .data_kinds = (1 << DATA_KIND_FILE),
-      .media_kinds = MEDIA_KIND_MUSIC,
-      .cache = ON_SUCCESS | ON_FAILURE,
-    },
-    {
-      // The Cover Art Archive seems rather slow, so low priority
+   .handler = source_item_coverartarchive_get,
+   .data_kinds = (1 << DATA_KIND_FILE),
+   .media_kinds = MEDIA_KIND_MUSIC,
+   .cache = ON_SUCCESS | ON_FAILURE,
+   },
+  {
+   // The Cover Art Archive seems rather slow, so low priority
       .name = "Cover Art Archive (streams)",
-      .handler = source_item_coverartarchive_get,
-      .data_kinds = (1 << DATA_KIND_HTTP) | (1 << DATA_KIND_PIPE),
-      .media_kinds = MEDIA_KIND_MUSIC,
-      .cache = NEVER,
-    },
-    {
-      .name = "own (pipe)",
-      .handler = source_item_own_get,
-      .data_kinds = (1 << DATA_KIND_PIPE),
-      .media_kinds = MEDIA_KIND_ALL,
-      .cache = ON_SUCCESS | ON_FAILURE,
-    },
-    {
-      .name = NULL,
-      .handler = NULL,
-      .data_kinds = 0,
-      .cache = 0,
-    }
-  };
+   .handler = source_item_coverartarchive_get,
+   .data_kinds = (1 << DATA_KIND_HTTP) | (1 << DATA_KIND_PIPE),
+   .media_kinds = MEDIA_KIND_MUSIC,
+   .cache = NEVER,
+   },
+  {
+   .name = "own (pipe)",
+   .handler = source_item_own_get,
+   .data_kinds = (1 << DATA_KIND_PIPE),
+   .media_kinds = MEDIA_KIND_ALL,
+   .cache = ON_SUCCESS | ON_FAILURE,
+   },
+  {
+   .name = NULL,
+   .handler = NULL,
+   .data_kinds = 0,
+   .cache = 0,
+   }
+};
 
 /* Forward - parsers of online source responses */
-static enum parse_result response_jparse_spotify(char **artwork_url, json_object *response, int max_w, int max_h);
-static enum parse_result response_jparse_discogs(char **artwork_url, json_object *response, int max_w, int max_h);
-static enum parse_result response_jparse_musicbrainz(char **artwork_url, json_object *response, int max_w, int max_h);
+static enum parse_result
+response_jparse_spotify(char **artwork_url, json_object *response, int max_w, int max_h);
+static enum parse_result
+response_jparse_discogs(char **artwork_url, json_object *response, int max_w, int max_h);
+static enum parse_result
+response_jparse_musicbrainz(char **artwork_url, json_object *response, int max_w, int max_h);
 
-static int credentials_get_spotify(char **auth_key, char **auth_secret);
-static int credentials_get_discogs(char **auth_key, char **auth_secret);
+static int
+credentials_get_spotify(char **auth_key, char **auth_secret);
+static int
+credentials_get_discogs(char **auth_key, char **auth_secret);
 
 static struct online_search_history search_history_spotify = { .mutex = PTHREAD_MUTEX_INITIALIZER };
 static struct online_search_history search_history_discogs = { .mutex = PTHREAD_MUTEX_INITIALIZER };
@@ -418,8 +442,6 @@ static const struct online_source musicbrainz_source =
     .response_jparse = response_jparse_musicbrainz,
     .search_history = &search_history_musicbrainz,
   };
-
-
 
 /* -------------------------------- HELPERS -------------------------------- */
 
@@ -482,7 +504,7 @@ artwork_read_byurl(struct evbuffer *evbuf, const char *url)
   else
     DPRINTF(E_LOG, L_ART, "Artwork from '%s' has no known content type\n", url);
 
- out:
+out:
   keyval_clear(kv);
   free(kv);
   return format;
@@ -534,7 +556,7 @@ artwork_read_bypath(struct evbuffer *evbuf, char *path)
 
   return 0;
 
- out_fail:
+out_fail:
   close(fd);
   return -1;
 }
@@ -603,7 +625,8 @@ size_calculate(int *dst_w, int *dst_h, int src_w, int src_h, int max_w, int max_
  * @return           ART_FMT_* on success, ART_E_ERROR on error
  */
 static int
-artwork_get(struct evbuffer *evbuf, char *path, struct evbuffer *in_buf, bool is_embedded, enum data_kind data_kind, struct artwork_req_params req_params)
+artwork_get(struct evbuffer *evbuf, char *path, struct evbuffer *in_buf, bool is_embedded, enum data_kind data_kind,
+    struct artwork_req_params req_params)
 {
   struct transcode_decode_setup_args xcode_decode_args = { .profile = XCODE_JPEG }; // Covers XCODE_PNG too
   struct transcode_encode_setup_args xcode_encode_args = { 0 };
@@ -702,7 +725,7 @@ artwork_get(struct evbuffer *evbuf, char *path, struct evbuffer *in_buf, bool is
       if (path)
 	ret = artwork_read_bypath(evbuf, path);
       else
-        ret = evbuffer_add_buffer(evbuf, in_buf);
+	ret = evbuffer_add_buffer(evbuf, in_buf);
 
       ret = (ret < 0) ? ART_E_ERROR : src_format;
       goto out;
@@ -750,7 +773,7 @@ artwork_get(struct evbuffer *evbuf, char *path, struct evbuffer *in_buf, bool is
 
   ret = dst_format;
 
- out:
+out:
   transcode_encode_cleanup(&xcode_encode);
   transcode_decode_cleanup(&xcode_decode);
 
@@ -805,10 +828,12 @@ dir_image_find(char *out_path, size_t len, const char *dir)
     {
       for (j = 0; j < nextensions; j++)
 	{
-	  ret = snprintf(path + path_len, sizeof(path) - path_len, "/%s.%s", cfg_getnstr(lib, "artwork_basenames", i), cover_extension[j]);
+	  ret = snprintf(path + path_len, sizeof(path) - path_len, "/%s.%s", cfg_getnstr(lib, "artwork_basenames", i),
+	      cover_extension[j]);
 	  if ((ret < 0) || (ret >= sizeof(path) - path_len))
 	    {
-	      DPRINTF(E_LOG, L_ART, "Artwork path will exceed PATH_MAX (%s/%s)\n", dir, cfg_getnstr(lib, "artwork_basenames", i));
+	      DPRINTF(E_LOG, L_ART, "Artwork path will exceed PATH_MAX (%s/%s)\n", dir,
+	          cfg_getnstr(lib, "artwork_basenames", i));
 	      continue;
 	    }
 
@@ -877,7 +902,7 @@ parent_dir_image_find(char *out_path, size_t len, const char *dir)
     {
       ret = snprintf(path + path_len, sizeof(path) - path_len, "/%s.%s", parentdir, cover_extension[i]);
       if ((ret < 0) || (ret >= sizeof(path) - path_len))
-        {
+	{
 	  DPRINTF(E_LOG, L_ART, "Artwork path will exceed PATH_MAX (%s)\n", parentdir);
 	  continue;
 	}
@@ -964,7 +989,7 @@ artwork_get_byurl(struct evbuffer *artwork, const char *url, struct artwork_req_
   if (ret < 0)
     format = ART_E_ERROR;
 
- out:
+out:
   evbuffer_free(raw);
   return format;
 }
@@ -1086,7 +1111,7 @@ response_jparse_spotify(char **artwork_url, json_object *response, int max_w, in
 	{
 	  s = jparse_str_from_obj(image, "url");
 
-	  if (max_w <= 0  || jparse_int_from_obj(image, "width") <= max_w)
+	  if (max_w <= 0 || jparse_int_from_obj(image, "width") <= max_w)
 	    {
 	      // We have the first image that has a smaller width than the given max_w
 	      break;
@@ -1102,7 +1127,8 @@ response_jparse_spotify(char **artwork_url, json_object *response, int max_w, in
 }
 
 static enum parse_result
-online_source_response_parse(char **artwork_url, const struct online_source *src, struct evbuffer *response, int max_w, int max_h)
+online_source_response_parse(
+    char **artwork_url, const struct online_source *src, struct evbuffer *response, int max_w, int max_h)
 {
   json_object *jresponse;
   char *body;
@@ -1169,12 +1195,13 @@ online_source_search_url_make(char *url, size_t url_size, const struct online_so
 
   if (!artist || (!album && !title))
     {
-      DPRINTF(E_DBG, L_ART, "Cannot construct query to %s, missing input data (artist=%s, album=%s, title=%s)\n", src->name, artist, album, title);
+      DPRINTF(E_DBG, L_ART, "Cannot construct query to %s, missing input data (artist=%s, album=%s, title=%s)\n",
+          src->name, artist, album, title);
       goto error;
     }
 
-  if ((artist && strncmp(CFG_NAME_UNKNOWN_ARTIST, artist, strlen(CFG_NAME_UNKNOWN_ARTIST)) == 0) ||
-      (album && strncmp(CFG_NAME_UNKNOWN_ALBUM, album, strlen(CFG_NAME_UNKNOWN_ARTIST)) == 0) )
+  if ((artist && strncmp(CFG_NAME_UNKNOWN_ARTIST, artist, strlen(CFG_NAME_UNKNOWN_ARTIST)) == 0)
+      || (album && strncmp(CFG_NAME_UNKNOWN_ALBUM, album, strlen(CFG_NAME_UNKNOWN_ARTIST)) == 0))
     {
       DPRINTF(E_DBG, L_ART, "Skipping online artwork search for unknown artist/album\n");
       goto error;
@@ -1188,9 +1215,9 @@ online_source_search_url_make(char *url, size_t url_size, const struct online_so
 	continue;
 
       snprintf(param, sizeof(param), "%s", src->query_parts[i].template);
-      if ((safe_snreplace(param, sizeof(param), "$ARTIST$", artist) < 0) ||
-	  (safe_snreplace(param, sizeof(param), "$ALBUM$", album) < 0) ||
-	  (safe_snreplace(param, sizeof(param), "$TITLE$", title) < 0))
+      if ((safe_snreplace(param, sizeof(param), "$ARTIST$", artist) < 0)
+          || (safe_snreplace(param, sizeof(param), "$ALBUM$", album) < 0)
+          || (safe_snreplace(param, sizeof(param), "$TITLE$", title) < 0))
 	{
 	  DPRINTF(E_WARN, L_ART, "Cannot make request for online artwork, query string is too long\n");
 	  goto error;
@@ -1224,7 +1251,7 @@ online_source_search_url_make(char *url, size_t url_size, const struct online_so
 
   return 0;
 
- error:
+error:
   free(encoded_query);
   keyval_clear(&query);
   free_queue_item(queue_item, 0);
@@ -1232,14 +1259,13 @@ online_source_search_url_make(char *url, size_t url_size, const struct online_so
 }
 
 static int
-online_source_search_check_last(char **last_artwork_url, const struct online_source *src, uint32_t hash, int max_w, int max_h)
+online_source_search_check_last(
+    char **last_artwork_url, const struct online_source *src, uint32_t hash, int max_w, int max_h)
 {
   struct online_search_history *history = src->search_history;
   bool is_same;
 
-  is_same = (hash == history->last_hash) &&
-            (max_w == history->last_max_w) &&
-            (max_h == history->last_max_h);
+  is_same = (hash == history->last_hash) && (max_w == history->last_max_w) && (max_h == history->last_max_h);
 
   if (is_same)
     *last_artwork_url = safe_strdup(history->last_artwork_url);
@@ -1273,7 +1299,8 @@ online_source_is_failing(const struct online_source *src, int id)
 }
 
 static void
-online_source_history_update(const struct online_source *src, int id, uint32_t request_hash, int response_code, const char *artwork_url, int max_w, int max_h)
+online_source_history_update(const struct online_source *src, int id, uint32_t request_hash, int response_code,
+    const char *artwork_url, int max_w, int max_h)
 {
   struct online_search_history *history = src->search_history;
 
@@ -1309,8 +1336,8 @@ auth_header_add(struct keyval *headers, const struct online_source *src)
     return -1;
 
   snprintf(auth_header, sizeof(auth_header), "%s", src->auth_header);
-  ret = ((safe_snreplace(auth_header, sizeof(auth_header), "$KEY$", auth_key) < 0) ||
-         (safe_snreplace(auth_header, sizeof(auth_header), "$SECRET$", auth_secret) < 0));
+  ret = ((safe_snreplace(auth_header, sizeof(auth_header), "$KEY$", auth_key) < 0)
+         || (safe_snreplace(auth_header, sizeof(auth_header), "$SECRET$", auth_secret) < 0));
 
   free(auth_key);
   free(auth_secret);
@@ -1384,7 +1411,7 @@ online_source_artwork_url_get(const char *search_url, const struct online_source
   evbuffer_free(client.input_body);
   return artwork_url;
 
- error:
+error:
   online_source_history_update(src, id, hash, client.response_code, NULL, max_w, max_h);
   evbuffer_free(client.input_body);
   return NULL;
@@ -1430,7 +1457,6 @@ online_source_is_enabled(const struct online_source *src)
   return enabled;
 }
 
-
 /* ---------------------- SOURCE HANDLER IMPLEMENTATION -------------------- */
 
 /* Looks in the cache for group artwork
@@ -1442,7 +1468,8 @@ source_group_cache_get(struct artwork_ctx *ctx)
   int cached;
   int ret;
 
-  ret = cache_artwork_get(CACHE_ARTWORK_GROUP, ctx->persistentid, ctx->req_params.max_w, ctx->req_params.max_h, &cached, &format, ctx->evbuf);
+  ret = cache_artwork_get(CACHE_ARTWORK_GROUP, ctx->persistentid, ctx->req_params.max_w, ctx->req_params.max_h, &cached,
+      &format, ctx->evbuf);
   if (ret < 0)
     return ART_E_ERROR;
 
@@ -1517,7 +1544,8 @@ source_item_cache_get(struct artwork_ctx *ctx)
   if (!ctx->individual)
     return ART_E_NONE;
 
-  ret = cache_artwork_get(CACHE_ARTWORK_INDIVIDUAL, ctx->id, ctx->req_params.max_w, ctx->req_params.max_h, &cached, &format, ctx->evbuf);
+  ret = cache_artwork_get(
+      CACHE_ARTWORK_INDIVIDUAL, ctx->id, ctx->req_params.max_w, ctx->req_params.max_h, &cached, &format, ctx->evbuf);
   if (ret < 0)
     return ART_E_ERROR;
 
@@ -1639,7 +1667,7 @@ source_item_artwork_url_get(struct artwork_ctx *ctx)
 
   return ret;
 
- notfound:
+notfound:
   free_queue_item(queue_item, 0);
   return ART_E_NONE;
 }
@@ -1681,7 +1709,7 @@ source_item_pipe_get(struct artwork_ctx *ctx)
   free_queue_item(queue_item, 0);
   return artwork_get(ctx->evbuf, ctx->path, NULL, false, ctx->data_kind, ctx->req_params);
 
- notfound:
+notfound:
   free_queue_item(queue_item, 0);
   return ART_E_NONE;
 }
@@ -1727,6 +1755,17 @@ source_item_coverartarchive_get(struct artwork_ctx *ctx)
   ret = artwork_get_byurl(ctx->evbuf, url, ctx->req_params);
 
   free(url);
+  return ret;
+}
+
+static int
+source_item_subsonicwebapi_track_get(struct artwork_ctx *ctx)
+{
+  int ret;
+  char *artwork_url;
+  artwork_url = subsonicwebapi_artwork_url_get(ctx->dbmfi->url, 0, 0);
+  ret = artwork_get_byurl(ctx->evbuf, artwork_url, ctx->req_params);
+
   return ret;
 }
 
@@ -1852,7 +1891,6 @@ source_item_ownpl_get(struct artwork_ctx *ctx)
   return format;
 }
 
-
 /* --------------------------- SOURCE PROCESSING --------------------------- */
 
 static int
@@ -1879,10 +1917,8 @@ process_items(struct artwork_ctx *ctx, int item_mode)
       if (item_mode && !ctx->individual)
 	goto no_artwork;
 
-      ret = (safe_atoi32(dbmfi.id, &ctx->id) < 0) ||
-            (safe_atou32(dbmfi.data_kind, &ctx->data_kind) < 0) ||
-            (safe_atou32(dbmfi.media_kind, &ctx->media_kind) < 0) ||
-            (ctx->data_kind > 30);
+      ret = (safe_atoi32(dbmfi.id, &ctx->id) < 0) || (safe_atou32(dbmfi.data_kind, &ctx->data_kind) < 0)
+            || (safe_atou32(dbmfi.media_kind, &ctx->media_kind) < 0) || (ctx->data_kind > 30);
       if (ret)
 	{
 	  DPRINTF(E_LOG, L_ART, "Error converting dbmfi id, data_kind or media_kind to number for '%s'\n", dbmfi.path);
@@ -1909,20 +1945,23 @@ process_items(struct artwork_ctx *ctx, int item_mode)
 
 	  if (ret > 0)
 	    {
-	      DPRINTF(E_DBG, L_ART, "Artwork for '%s' found in source '%s'\n", dbmfi.title, artwork_item_source[i].name);
+	      DPRINTF(
+	          E_DBG, L_ART, "Artwork for '%s' found in source '%s'\n", dbmfi.title, artwork_item_source[i].name);
 	      ctx->cache = artwork_item_source[i].cache;
 	      db_query_end(&ctx->qp);
 	      return ret;
 	    }
 	  else if (ret == ART_E_ABORT)
 	    {
-	      DPRINTF(E_DBG, L_ART, "Source '%s' stopped search for artwork for '%s'\n", artwork_item_source[i].name, dbmfi.title);
+	      DPRINTF(E_DBG, L_ART, "Source '%s' stopped search for artwork for '%s'\n", artwork_item_source[i].name,
+	          dbmfi.title);
 	      ctx->cache = NEVER;
 	      break;
 	    }
 	  else if (ret == ART_E_ERROR)
 	    {
-	      DPRINTF(E_LOG, L_ART, "Source '%s' returned an error for '%s'\n", artwork_item_source[i].name, dbmfi.title);
+	      DPRINTF(
+	          E_LOG, L_ART, "Source '%s' returned an error for '%s'\n", artwork_item_source[i].name, dbmfi.title);
 	      ctx->cache = NEVER;
 	    }
 	}
@@ -1934,7 +1973,7 @@ process_items(struct artwork_ctx *ctx, int item_mode)
       ctx->cache = NEVER;
     }
 
- no_artwork:
+no_artwork:
   db_query_end(&ctx->qp);
 
   return -1;
@@ -1959,11 +1998,13 @@ process_group(struct artwork_ctx *ctx)
   ret = db_query_start(&ctx->qp);
   if (ret < 0)
     {
-      DPRINTF(E_LOG, L_ART, "Could not start query to check if group is valid (persistentid = %" PRIi64 ")\n", ctx->qp.persistentid);
+      DPRINTF(E_LOG, L_ART, "Could not start query to check if group is valid (persistentid = %" PRIi64 ")\n",
+          ctx->qp.persistentid);
       goto invalid_group;
     }
 
-  is_valid = (db_query_fetch_file(&dbmfi, &ctx->qp) == 0 && strcmp(dbmfi.album, CFG_NAME_UNKNOWN_ALBUM) != 0 && strcmp(dbmfi.album_artist, CFG_NAME_UNKNOWN_ARTIST) != 0);
+  is_valid = (db_query_fetch_file(&dbmfi, &ctx->qp) == 0 && strcmp(dbmfi.album, CFG_NAME_UNKNOWN_ALBUM) != 0
+              && strcmp(dbmfi.album_artist, CFG_NAME_UNKNOWN_ARTIST) != 0);
   db_query_end(&ctx->qp);
   if (!is_valid)
     {
@@ -1982,27 +2023,29 @@ process_group(struct artwork_ctx *ctx)
       ret = artwork_group_source[i].handler(ctx);
       if (ret > 0)
 	{
-	  DPRINTF(E_DBG, L_ART, "Artwork for group %" PRIi64 " found in source '%s'\n", ctx->persistentid, artwork_group_source[i].name);
+	  DPRINTF(E_DBG, L_ART, "Artwork for group %" PRIi64 " found in source '%s'\n", ctx->persistentid,
+	      artwork_group_source[i].name);
 	  ctx->cache = artwork_group_source[i].cache;
 	  return ret;
 	}
       else if (ret == ART_E_ABORT)
 	{
-	  DPRINTF(E_DBG, L_ART, "Source '%s' stopped search for artwork for group %" PRIi64 "\n", artwork_group_source[i].name, ctx->persistentid);
+	  DPRINTF(E_DBG, L_ART, "Source '%s' stopped search for artwork for group %" PRIi64 "\n",
+	      artwork_group_source[i].name, ctx->persistentid);
 	  ctx->cache = NEVER;
 	  return -1;
 	}
       else if (ret == ART_E_ERROR)
 	{
-	  DPRINTF(E_LOG, L_ART, "Source '%s' returned an error for group %" PRIi64 "\n", artwork_group_source[i].name, ctx->persistentid);
+	  DPRINTF(E_LOG, L_ART, "Source '%s' returned an error for group %" PRIi64 "\n", artwork_group_source[i].name,
+	      ctx->persistentid);
 	  ctx->cache = NEVER;
 	}
     }
 
- invalid_group:
+invalid_group:
   return process_items(ctx, 0);
 }
-
 
 /* ------------------------------ ARTWORK API ------------------------------ */
 
@@ -2016,7 +2059,7 @@ artwork_get_item(struct evbuffer *evbuf, int id, int max_w, int max_h, int forma
   DPRINTF(E_DBG, L_ART, "Artwork request for item %d (max_w=%d, max_h=%d)\n", id, max_w, max_h);
 
   if (id == DB_MEDIA_FILE_NON_PERSISTENT_ID)
-    return  -1;
+    return -1;
 
   memset(&ctx, 0, sizeof(struct artwork_ctx));
 
@@ -2129,10 +2172,12 @@ artwork_file_is_artwork(const char *filename)
     {
       for (j = 0; j < ARRAY_SIZE(cover_extension); j++)
 	{
-	  ret = snprintf(artwork, sizeof(artwork), "%s.%s", cfg_getnstr(lib, "artwork_basenames", i), cover_extension[j]);
+	  ret = snprintf(
+	      artwork, sizeof(artwork), "%s.%s", cfg_getnstr(lib, "artwork_basenames", i), cover_extension[j]);
 	  if ((ret < 0) || (ret >= sizeof(artwork)))
 	    {
-	      DPRINTF(E_INFO, L_ART, "Artwork path exceeds PATH_MAX (%s.%s)\n", cfg_getnstr(lib, "artwork_basenames", i), cover_extension[j]);
+	      DPRINTF(E_INFO, L_ART, "Artwork path exceeds PATH_MAX (%s.%s)\n",
+	          cfg_getnstr(lib, "artwork_basenames", i), cover_extension[j]);
 	      continue;
 	    }
 
@@ -2162,11 +2207,11 @@ artwork_extension_is_artwork(const char *path)
       len = strlen(cover_extension[i]);
 
       if (strncasecmp(cover_extension[i], ext, len) != 0)
-        continue;
+	continue;
 
       // Check that after the extension we either have the end or "?"
       if (ext[len] != '\0' && ext[len] != '?')
-        continue;
+	continue;
 
       return true;
     }

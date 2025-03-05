@@ -85,6 +85,7 @@ extern struct library_source filescanner;
 extern struct library_source spotifyscanner;
 #endif
 extern struct library_source rssscanner;
+extern struct library_source subsonicsource;
 
 static struct library_source *sources[] = {
     &filescanner,
@@ -92,6 +93,7 @@ static struct library_source *sources[] = {
     &spotifyscanner,
 #endif
     &rssscanner,
+    &subsonicsource,
     NULL
 };
 

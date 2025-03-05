@@ -256,6 +256,19 @@ static cfg_opt_t sec_streaming[] =
     CFG_END()
   };
 
+/* Subsonic section structure */
+static cfg_opt_t sec_subsonic[] =
+  {
+    CFG_BOOL("enabled", cfg_false, CFGF_NONE),
+    CFG_STR("server_url", NULL, CFGF_NONE),
+    CFG_STR("username", NULL, CFGF_NONE),
+    CFG_STR("password", NULL, CFGF_NONE),
+    CFG_STR("api_version", "1.16.1", CFGF_NONE),
+    CFG_INT("offset_ms", 0, CFGF_NONE),
+    CFG_BOOL("use_token_auth", cfg_true, CFGF_NONE),
+    CFG_END()
+  };
+
 /* Config file structure */
 static cfg_opt_t toplvl_cfg[] =
   {
@@ -272,6 +285,7 @@ static cfg_opt_t toplvl_cfg[] =
     CFG_SEC("sqlite", sec_sqlite, CFGF_NONE),
     CFG_SEC("mpd", sec_mpd, CFGF_NONE),
     CFG_SEC("streaming", sec_streaming, CFGF_NONE),
+    CFG_SEC("subsonic", sec_subsonic, CFGF_NONE),
     CFG_END()
   };
 

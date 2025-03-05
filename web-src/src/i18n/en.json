@@ -4,6 +4,7 @@
       "file": "File",
       "url": "URL",
       "spotify": "Spotify",
+      "subsonic": "Subsonic",
       "pipe": "Stream"
     }
   },

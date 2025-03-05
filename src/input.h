@@ -1,4 +1,3 @@
-
 #ifndef __INPUT_H__
 #define __INPUT_H__
 
@@ -22,6 +21,7 @@ enum input_types
 #ifdef SPOTIFY_LIBSPOTIFY
   INPUT_TYPE_LIBSPOTIFY,
 #endif
+  INPUT_TYPE_SUBSONIC,
 };
 
 enum input_flags
