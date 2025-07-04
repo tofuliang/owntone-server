@@ -585,7 +585,7 @@ db_media_kind_enum(const char *label)
 }
 
 /* Keep in sync with enum data_kind */
-static char *data_kind_label[] = { "file", "url", "spotify", "pipe" };
+static char *data_kind_label[] = { "file", "url", "spotify", "pipe", "opensubsonic" };
 
 const char *
 db_data_kind_label(enum data_kind data_kind)
@@ -605,6 +605,7 @@ static const struct enum_label scan_kind_labels[] =
     { SCAN_KIND_FILES,      "files" },
     { SCAN_KIND_SPOTIFY,    "spotify" },
     { SCAN_KIND_RSS,        "rss" },
+    { SCAN_KIND_OPENSUBSONIC, "opensubsonic" },
   };
 
 const char *

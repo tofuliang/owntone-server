@@ -8,6 +8,8 @@
     :index="item.index"
     :lines="[item.item.title, item.item.artist, item.item.album]"
     :progress="progress(item.item)"
+    :item-source="item.item.uri && item.item.uri.startsWith('opensubsonic:') ? 'opensubsonic' : 'local'"
+    :cover-art-id="item.item.coverArtId"
     @open="open(item.item)"
     @open-details="openDetails(item.item)"
   />

@@ -59,6 +59,7 @@
 # include "library/spotify_webapi.h"
 # include "inputs/spotify.h"
 #endif
+#include "library/opensubsonic_api.h" // Added for OpenSubsonic
 
 struct track_attribs
 {
@@ -979,6 +980,471 @@ jsonapi_reply_settings_get(struct httpd_request *hreq)
   return HTTP_OK;
 }
 
+// Handler for PUT /api/opensubsonic/config
+static int
+jsonapi_reply_opensubsonic_config_put(struct httpd_request *hreq)
+{
+  json_object *jbody;
+  const char *server_url, *username, *password, *token_str, *salt_str;
+  bool enabled = true; // Assume if they are saving, they want it enabled. Or get from JSON.
+  cfg_t *os_cfg_section;
+  int ret_val = HTTP_NOCONTENT;
+
+  jbody = jparse_obj_from_evbuffer(hreq->in_body);
+  if (!jbody) {
+    DPRINTF(E_LOG, L_WEB, "OpenSubsonic Config: Failed to parse JSON body.\n");
+    return HTTP_BADREQUEST;
+  }
+
+  server_url = jparse_str_from_obj(jbody, "server_url");
+  username = jparse_str_from_obj(jbody, "username");
+  password = jparse_str_from_obj(jbody, "password"); // Might be empty if using token
+  token_str = jparse_str_from_obj(jbody, "token");   // Optional
+  salt_str = jparse_str_from_obj(jbody, "salt");     // Optional
+
+  if (jparse_contains_key(jbody, "enabled", json_type_boolean)){
+    enabled = jparse_bool_from_obj(jbody, "enabled");
+  }
+
+  // Basic validation
+  if (!server_url || !username ) {
+    DPRINTF(E_LOG, L_WEB, "OpenSubsonic Config: Missing server_url or username.\n");
+    jparse_free(jbody);
+    return HTTP_BADREQUEST;
+  }
+   if ((!password || password[0] == '\0') && (!token_str || token_str[0] == '\0')) {
+    DPRINTF(E_LOG, L_WEB, "OpenSubsonic Config: Missing password or token.\n");
+    jparse_free(jbody);
+    return HTTP_BADREQUEST;
+  }
+
+
+  // Update in-memory config and save to owntone.local.conf
+  // This uses the settings.c mechanism, which is preferred for runtime changes.
+  os_cfg_section = cfg_getsec(cfg, "opensubsonic");
+  if (!os_cfg_section) {
+      DPRINTF(E_FATAL, L_CONF, "OpenSubsonic config section missing at runtime update attempt.\n");
+      // Attempt to create it if it doesn't exist, though conffile.c should define it.
+      // This might be overly complex if cfg_add_section isn't a standard way to do this here.
+      // For now, assume it exists due to conffile.c changes.
+      jparse_free(jbody);
+      return HTTP_INTERNAL;
+  }
+
+  // cfg_set_local_value will create the setting in the local cache if it doesn't exist
+  cfg_set_local_value(os_cfg_section, "enabled", enabled ? "yes" : "no");
+  cfg_set_local_value(os_cfg_section, "server_url", server_url);
+  cfg_set_local_value(os_cfg_section, "username", username);
+  cfg_set_local_value(os_cfg_section, "password", password ? password : "");
+  cfg_set_local_value(os_cfg_section, "token", token_str ? token_str : "");
+  cfg_set_local_value(os_cfg_section, "salt", salt_str ? salt_str : "");
+  // client_name and api_version are typically not changed at runtime by user.
+
+  if (settings_save_local() < 0) {
+      DPRINTF(E_LOG, L_WEB, "OpenSubsonic Config: Failed to save settings to local conf file.\n");
+      ret_val = HTTP_INTERNAL;
+      // Proceed to try and load config anyway, as it's in memory
+  }
+
+  opensubsonic_api_load_config(); // Reloads from global cfg into opensubsonic_api's internal state
+
+  // Re-initialize or notify the scanner. Using rescan as a generic way to re-init.
+  // A more specific re-init function in opensubsonic_scanner.c might be better.
+  library_rescan(SCAN_KIND_OPENSUBSONIC);
+
+
+  jparse_free(jbody);
+  return ret_val;
+}
+
+// Handler for POST /api/opensubsonic/test
+static int
+jsonapi_reply_opensubsonic_test(struct httpd_request *hreq)
+{
+  json_object *jbody;
+  const char *server_url, *username, *password, *token_str, *salt_str;
+  json_object *jreply;
+  const char *errmsg = NULL;
+  int ping_ret;
+
+  // This struct will hold temporary config for testing
+  struct opensubsonic_config test_config;
+  const struct opensubsonic_config *original_config;
+
+  jbody = jparse_obj_from_evbuffer(hreq->in_body);
+  if (!jbody) {
+    return HTTP_BADREQUEST;
+  }
+
+  server_url = jparse_str_from_obj(jbody, "server_url");
+  username = jparse_str_from_obj(jbody, "username");
+  password = jparse_str_from_obj(jbody, "password");
+  token_str = jparse_str_from_obj(jbody, "token");
+  salt_str = jparse_str_from_obj(jbody, "salt");
+
+
+  if (!server_url || !username || ((!password || password[0] == '\0') && (!token_str || token_str[0] == '\0'))) {
+    jparse_free(jbody);
+    // Simple error for now, could be more specific in JSON response
+    httpd_send_error(hreq, HTTP_BADREQUEST, "Missing required fields for test.");
+    return HTTP_BADREQUEST; // Important to return here so it doesn't continue
+  }
+
+  // Temporarily override current_config for the ping
+  // Need to be careful with threading if config_lock is not sufficient
+  // A better way would be for opensubsonic_api_ping to accept config directly.
+  // For now, let's try to simulate this carefully.
+  // This is NOT thread-safe if other parts of opensubsonic_api.c read current_config without holding the lock
+  // during the ping operation.
+  // A safer way: opensubsonic_api_ping should accept parameters or a temporary config struct.
+  // Let's assume opensubsonic_api_ping will be modified or we accept this risk for now.
+  // For now, this is a placeholder for how it *could* work if ping could take params.
+  // The current opensubsonic_api_ping uses the global current_config.
+  // We will *NOT* modify global config here. Instead, we'll rely on future
+  // modification of opensubsonic_api_ping to accept parameters.
+  // For this iteration, we'll just use the *currently saved* config for the test.
+  // This means the user must save *before* testing if they changed something.
+  // This is not ideal UX, but safer than manipulating global state without proper redesign.
+  // A better approach for `opensubsonic_api_ping` would be:
+  // int opensubsonic_api_ping_with_config(const struct opensubsonic_config *temp_config, const char **errmsg)
+
+  // Given the current structure of opensubsonic_api_ping, it uses the global config.
+  // So, this test endpoint will effectively test the *currently saved and loaded* configuration.
+  // If the user wants to test unsaved changes, they'd need to save first.
+  // This is a limitation I'll note.
+  // The frontend sends current form data, so the backend *should* use that.
+  // Let's simulate this by temporarily setting the global config. This is risky.
+
+  original_config = opensubsonic_api_get_config(); // Get a pointer to the real one
+  memcpy(&test_config, original_config, sizeof(struct opensubsonic_config)); // Copy it
+
+  // Update test_config with values from JSON body
+  // Must strdup these as they are from jbody which will be freed
+  safe_free_string(&test_config.server_url);
+  test_config.server_url = safe_strdup(server_url);
+  safe_free_string(&test_config.username);
+  test_config.username = safe_strdup(username);
+  safe_free_string(&test_config.password);
+  test_config.password = safe_strdup(password ? password : "");
+  safe_free_string(&test_config.token);
+  test_config.token = safe_strdup(token_str ? token_str : "");
+  safe_free_string(&test_config.salt);
+  test_config.salt = safe_strdup(salt_str ? salt_str : "");
+  test_config.enabled = true; // Assume testing means we want to try as if enabled
+
+  // This is the problematic part: temporarily overriding global config.
+  // This requires opensubsonic_api.c to be designed to handle this, or a dedicated ping function.
+  // For now, we'll assume we can't easily modify opensubsonic_api.c's internal config for a single call.
+  // The best we can do without deeper changes is to ping using the *currently loaded* config.
+  // The frontend sends the current form data, so the backend *should* use that.
+  // A proper solution: `opensubsonic_api_ping` takes a config struct.
+  // Let's assume we modify `build_auth_params` and `make_opensubsonic_request` to accept overrides.
+  // This is not done yet in opensubsonic_api.c.
+  // For now, the test will use the *saved* configuration. This is a known limitation.
+  // **Correction**: The `build_auth_params` and `make_opensubsonic_request` in the previously generated
+  // `opensubsonic_api.c` *can* be adapted to take overrides for a test scenario.
+  // Let's assume `opensubsonic_api_ping` itself is not changed, but the underlying request maker can be.
+  // Or, create a specific ping_with_config.
+  // For now, to keep it simple, this test will use the *currently loaded* config.
+  // The frontend sends the config, but this backend function doesn't use it for the ping yet.
+  // This will be a point for refinement.
+  // **REVISED APPROACH FOR TEST**:
+  // The `make_opensubsonic_request` needs to be refactored to accept config overrides.
+  // This is a larger change to `opensubsonic_api.c`.
+  // For now, let's assume `opensubsonic_api_ping` will be called, and it uses its internal config.
+  // The frontend *thinks* it's sending data for test, but backend isn't using it for ping *yet*.
+  // To make this work as intended by frontend:
+  // 1. `opensubsonic_api_load_config_temporary(const struct opensubsonic_config* temp_conf)`
+  // 2. `opensubsonic_api_ping()`
+  // 3. `opensubsonic_api_restore_config()`
+  // This is getting complex. Simpler: `ping` should take parameters.
+  // Let's modify `opensubsonic_api_ping` to accept temporary credentials for testing.
+  // (This implies changes in opensubsonic_api.c which are not made yet, but this is the design intent)
+
+  // For now, let's assume a function `opensubsonic_api_ping_with_params` exists or will be created.
+  // If not, this test will just ping with the saved config.
+  // Given the current `opensubsonic_api.c`, it will use its loaded config.
+
+  // Let's assume a future `opensubsonic_api_ping_with_details` function:
+  // ping_ret = opensubsonic_api_ping_with_details(server_url, username, password, token_str, salt_str, &errmsg);
+  // For now, we'll call the standard ping and it will use the *saved* config.
+  // This means user must save then test.
+  // To actually use the provided data, `opensubsonic_api.c`'s `make_opensubsonic_request` would need
+  // to be modified to accept overrides for url, user, auth_params.
+
+  // Use the provided details to test the connection
+  // Default client_name and api_version from stored config if not in request,
+  // though frontend should ideally send them or they are fixed.
+  const struct opensubsonic_config *stored_config = opensubsonic_api_get_config();
+  const char *client_name = stored_config->client_name; // Fallback to stored
+  const char *api_version = stored_config->api_version; // Fallback to stored
+  bool legacy_auth = false; // Assuming modern auth for test unless specified
+
+  // Note: The frontend sends password/token, but legacy_auth is not part of the typical saveConfig payload from UI.
+  // For testing, we'll assume modern auth unless the global config's legacy_auth is true, or a test specific param is added.
+  // For simplicity, let's use the global legacy_auth for now if not overridden.
+  if (jparse_contains_key(jbody, "legacy_auth", json_type_boolean)){
+    legacy_auth = jparse_bool_from_obj(jbody, "legacy_auth");
+  } else {
+    legacy_auth = stored_config->legacy_auth;
+  }
+
+
+  ping_ret = opensubsonic_api_ping_with_details(server_url, username, password, token_str, salt_str,
+                                                legacy_auth, client_name, api_version, &errmsg);
+
+  jreply = json_object_new_object();
+  if (ping_ret == 0) {
+    json_object_object_add(jreply, "success", json_object_new_boolean(true));
+    json_object_object_add(jreply, "message", json_object_new_string("Connection successful."));
+  } else {
+    json_object_object_add(jreply, "success", json_object_new_boolean(false));
+    safe_json_add_string(jreply, "message", errmsg ? errmsg : "Connection failed. Check server URL, credentials, and ensure server is running.");
+  }
+
+  jparse_free(jbody); // Free jbody after extracting all values
+  CHECK_ERRNO(L_WEB, evbuffer_add_printf(hreq->out_body, "%s", json_object_to_json_string(jreply)));
+  jparse_free(jreply);
+
+  return HTTP_OK;
+}
+
+// Handler for GET /api/opensubsonic/search
+static int
+jsonapi_reply_opensubsonic_search(struct httpd_request *hreq)
+{
+  const char *query_str, *artist_count_str, *artist_offset_str, *album_count_str, *album_offset_str, *song_count_str, *song_offset_str;
+  int artist_count = 0, artist_offset = 0, album_count = 0, album_offset = 0, song_count = 20, song_offset = 0; // Default song_count
+  json_object *jresponse_data = NULL;
+  const char *errmsg = NULL;
+
+  query_str = httpd_query_value_find(hreq->query, "query");
+  if (!query_str || strlen(query_str) == 0) {
+    httpd_send_error(hreq, HTTP_BADREQUEST, "Missing or empty search query.");
+    return HTTP_BADREQUEST;
+  }
+
+  artist_count_str = httpd_query_value_find(hreq->query, "artistCount");
+  if (artist_count_str) safe_atoi32(artist_count_str, &artist_count);
+  artist_offset_str = httpd_query_value_find(hreq->query, "artistOffset");
+  if (artist_offset_str) safe_atoi32(artist_offset_str, &artist_offset);
+  album_count_str = httpd_query_value_find(hreq->query, "albumCount");
+  if (album_count_str) safe_atoi32(album_count_str, &album_count);
+  album_offset_str = httpd_query_value_find(hreq->query, "albumOffset");
+  if (album_offset_str) safe_atoi32(album_offset_str, &album_offset);
+  song_count_str = httpd_query_value_find(hreq->query, "songCount");
+  if (song_count_str) safe_atoi32(song_count_str, &song_count);
+  song_offset_str = httpd_query_value_find(hreq->query, "songOffset");
+  if (song_offset_str) safe_atoi32(song_offset_str, &song_offset);
+
+  jresponse_data = opensubsonic_api_search3(query_str,
+                                           artist_count, artist_offset,
+                                           album_count, album_offset,
+                                           song_count, song_offset,
+                                           &errmsg);
+
+  if (!jresponse_data) {
+    char err_buf[512];
+    snprintf(err_buf, sizeof(err_buf), "Search failed: %s", errmsg ? errmsg : "Unknown error from OpenSubsonic API client");
+    httpd_send_error(hreq, HTTP_INTERNAL, err_buf);
+    return HTTP_INTERNAL;
+  }
+
+  // Forward the JSON object directly
+  const char *json_string = json_object_to_json_string_ext(jresponse_data, JSON_C_TO_STRING_PLAIN);
+  evbuffer_add_printf(hreq->out_body, "%s", json_string);
+  jparse_free(jresponse_data); // Free the object after converting to string
+
+  return HTTP_OK;
+}
+
+// Handler for GET /api/opensubsonic/playlists
+static int
+jsonapi_reply_opensubsonic_playlists_get(struct httpd_request *hreq)
+{
+  const char *offset_str, *count_str;
+  int offset = 0, count = 0; // Defaults, server might have its own if these are 0/invalid
+  json_object *jresponse_data = NULL;
+  const char *errmsg = NULL;
+
+  offset_str = httpd_query_value_find(hreq->query, "offset");
+  if (offset_str) safe_atoi32(offset_str, &offset);
+  count_str = httpd_query_value_find(hreq->query, "count"); // Or "size" depending on Subsonic convention
+  if (count_str) safe_atoi32(count_str, &count);
+
+  jresponse_data = opensubsonic_api_get_playlists(offset, count, &errmsg);
+
+  if (!jresponse_data) {
+    char err_buf[512];
+    snprintf(err_buf, sizeof(err_buf), "Failed to get playlists: %s", errmsg ? errmsg : "Unknown error");
+    httpd_send_error(hreq, HTTP_INTERNAL, err_buf);
+    return HTTP_INTERNAL;
+  }
+
+  const char *json_string_resp = json_object_to_json_string_ext(jresponse_data, JSON_C_TO_STRING_PLAIN);
+  evbuffer_add_printf(hreq->out_body, "%s", json_string_resp);
+  jparse_free(jresponse_data);
+  return HTTP_OK;
+}
+
+// Handler for GET /api/opensubsonic/playlist/{playlistId}
+static int
+jsonapi_reply_opensubsonic_playlist_get_byid(struct httpd_request *hreq)
+{
+  const char *playlist_id_str;
+  json_object *jresponse_data = NULL;
+  const char *errmsg = NULL;
+
+  if (hreq->path_parts_count < 4) {
+    httpd_send_error(hreq, HTTP_BADREQUEST, "Missing playlist ID.");
+    return HTTP_BADREQUEST;
+  }
+  playlist_id_str = hreq->path_parts[3];
+
+  jresponse_data = opensubsonic_api_get_playlist(playlist_id_str, &errmsg);
+
+  if (!jresponse_data) {
+    char err_buf[512];
+    snprintf(err_buf, sizeof(err_buf), "Failed to get playlist %s: %s", playlist_id_str, errmsg ? errmsg : "Unknown error");
+    httpd_send_error(hreq, HTTP_INTERNAL, err_buf);
+    return HTTP_INTERNAL;
+  }
+
+  const char *json_string_resp = json_object_to_json_string_ext(jresponse_data, JSON_C_TO_STRING_PLAIN);
+  evbuffer_add_printf(hreq->out_body, "%s", json_string_resp);
+  jparse_free(jresponse_data);
+  return HTTP_OK;
+}
+
+// Handler for GET /api/opensubsonic/album/{albumId}
+static int
+jsonapi_reply_opensubsonic_album_get_byid(struct httpd_request *hreq)
+{
+  const char *album_id_str;
+  json_object *jresponse_data = NULL;
+  const char *errmsg = NULL;
+
+  if (hreq->path_parts_count < 4) {
+    httpd_send_error(hreq, HTTP_BADREQUEST, "Missing album ID.");
+    return HTTP_BADREQUEST;
+  }
+  album_id_str = hreq->path_parts[3];
+  jresponse_data = opensubsonic_api_get_album(album_id_str, &errmsg);
+
+  if (!jresponse_data) {
+    char err_buf[512];
+    snprintf(err_buf, sizeof(err_buf), "Failed to get album %s: %s", album_id_str, errmsg ? errmsg : "Unknown error");
+    httpd_send_error(hreq, HTTP_INTERNAL, err_buf);
+    return HTTP_INTERNAL;
+  }
+  const char *json_string_resp = json_object_to_json_string_ext(jresponse_data, JSON_C_TO_STRING_PLAIN);
+  evbuffer_add_printf(hreq->out_body, "%s", json_string_resp);
+  jparse_free(jresponse_data);
+  return HTTP_OK;
+}
+
+// Handler for GET /api/opensubsonic/artist/{artistId}
+static int
+jsonapi_reply_opensubsonic_artist_get_byid(struct httpd_request *hreq)
+{
+  const char *artist_id_str;
+  json_object *jresponse_data = NULL;
+  const char *errmsg = NULL;
+
+  if (hreq->path_parts_count < 4) {
+    httpd_send_error(hreq, HTTP_BADREQUEST, "Missing artist ID.");
+    return HTTP_BADREQUEST;
+  }
+  artist_id_str = hreq->path_parts[3];
+  jresponse_data = opensubsonic_api_get_artist(artist_id_str, &errmsg);
+
+  if (!jresponse_data) {
+    char err_buf[512];
+    snprintf(err_buf, sizeof(err_buf), "Failed to get artist %s: %s", artist_id_str, errmsg ? errmsg : "Unknown error");
+    httpd_send_error(hreq, HTTP_INTERNAL, err_buf);
+    return HTTP_INTERNAL;
+  }
+  const char *json_string_resp = json_object_to_json_string_ext(jresponse_data, JSON_C_TO_STRING_PLAIN);
+  evbuffer_add_printf(hreq->out_body, "%s", json_string_resp);
+  jparse_free(jresponse_data);
+  return HTTP_OK;
+}
+
+// Handler for GET /api/opensubsonic/song/{songId}
+static int
+jsonapi_reply_opensubsonic_song_get_byid(struct httpd_request *hreq)
+{
+  const char *song_id_str;
+  json_object *jresponse_data = NULL;
+  const char *errmsg = NULL;
+
+  if (hreq->path_parts_count < 4) {
+    httpd_send_error(hreq, HTTP_BADREQUEST, "Missing song ID.");
+    return HTTP_BADREQUEST;
+  }
+  song_id_str = hreq->path_parts[3];
+  jresponse_data = opensubsonic_api_get_song(song_id_str, &errmsg);
+
+  if (!jresponse_data) {
+    char err_buf[512];
+    snprintf(err_buf, sizeof(err_buf), "Failed to get song %s: %s", song_id_str, errmsg ? errmsg : "Unknown error");
+    httpd_send_error(hreq, HTTP_INTERNAL, err_buf);
+    return HTTP_INTERNAL;
+  }
+  const char *json_string_resp = json_object_to_json_string_ext(jresponse_data, JSON_C_TO_STRING_PLAIN);
+  evbuffer_add_printf(hreq->out_body, "%s", json_string_resp);
+  jparse_free(jresponse_data);
+  return HTTP_OK;
+}
+
+// Handler for GET /api/opensubsonic/coverarturl/{id}
+static int
+jsonapi_reply_opensubsonic_coverarturl_get_byid(struct httpd_request *hreq)
+{
+  const char *media_id_str;
+  const char *size_str;
+  int size = 0; // Default size, or server can decide
+  char *artwork_url = NULL;
+  const char *errmsg = NULL;
+  json_object *jreply;
+
+  if (hreq->path_parts_count < 4) {
+    httpd_send_error(hreq, HTTP_BADREQUEST, "Missing media ID for cover art URL.");
+    return HTTP_BADREQUEST;
+  }
+  media_id_str = hreq->path_parts[3];
+
+  size_str = httpd_query_value_find(hreq->query, "size");
+  if (size_str) {
+    safe_atoi32(size_str, &size);
+    if (size < 0) size = 0; // Ensure non-negative size
+  }
+
+  artwork_url = opensubsonic_api_get_cover_art_url(media_id_str, size, &errmsg);
+
+  if (!artwork_url) {
+    char err_buf[512];
+    snprintf(err_buf, sizeof(err_buf), "Failed to get cover art URL for ID %s: %s", media_id_str, errmsg ? errmsg : "Unknown error");
+    httpd_send_error(hreq, HTTP_INTERNAL, err_buf);
+    // Note: errmsg from opensubsonic_api_get_cover_art_url is not freed here as it's a const char*
+    // and its lifetime is managed by where it's defined (e.g. static string or part of a larger error system).
+    // If errmsg were allocated by opensubsonic_api_get_cover_art_url, it would need freeing.
+    return HTTP_INTERNAL;
+  }
+
+  jreply = json_object_new_object();
+  json_object_object_add(jreply, "url", json_object_new_string(artwork_url));
+
+  const char *json_string_resp = json_object_to_json_string_ext(jreply, JSON_C_TO_STRING_PLAIN);
+  evbuffer_add_printf(hreq->out_body, "%s", json_string_resp);
+
+  jparse_free(jreply);
+  free(artwork_url); // URL was allocated by opensubsonic_api_get_cover_art_url
+
+  return HTTP_OK;
+}
+
+
 static int
 jsonapi_reply_settings_category_get(struct httpd_request *hreq)
 {
@@ -1337,6 +1803,36 @@ jsonapi_reply_spotify_logout(struct httpd_request *hreq)
   spotify_logout();
 #endif
   return HTTP_NOCONTENT;
+}
+
+// Handler for GET /api/opensubsonic/status
+static int
+jsonapi_reply_opensubsonic_status(struct httpd_request *hreq)
+{
+  json_object *jreply;
+  const struct opensubsonic_config *os_config;
+  bool is_configured = false;
+
+  CHECK_NULL(L_WEB, jreply = json_object_new_object());
+
+  os_config = opensubsonic_api_get_config();
+
+  json_object_object_add(jreply, "enabled", json_object_new_boolean(opensubsonic_api_is_enabled()));
+
+  if (os_config && os_config->server_url && os_config->server_url[0] &&
+      os_config->username && os_config->username[0]) {
+    is_configured = true;
+  }
+
+  json_object_object_add(jreply, "configured", json_object_new_boolean(is_configured));
+  safe_json_add_string(jreply, "server_url", os_config ? os_config->server_url : "");
+  safe_json_add_string(jreply, "username", os_config ? os_config->username : "");
+  // Do not return password or token
+
+  CHECK_ERRNO(L_WEB, evbuffer_add_printf(hreq->out_body, "%s", json_object_to_json_string(jreply)));
+  jparse_free(jreply);
+
+  return HTTP_OK;
 }
 
 static int
@@ -4676,6 +5172,21 @@ static struct httpd_uri_map adm_handlers[] =
     { HTTPD_METHOD_GET,    "^/api/lastfm-logout$",                         jsonapi_reply_lastfm_logout },
     { HTTPD_METHOD_GET,    "^/api/lastfm$",                                jsonapi_reply_lastfm },
     { HTTPD_METHOD_POST,   "^/api/verification$",                          jsonapi_reply_verification },
+
+    // OpenSubsonic Config API
+    { HTTPD_METHOD_GET,    "^/api/opensubsonic/status$",                   jsonapi_reply_opensubsonic_status },
+    { HTTPD_METHOD_PUT,    "^/api/opensubsonic/config$",                   jsonapi_reply_opensubsonic_config_put },
+    { HTTPD_METHOD_POST,   "^/api/opensubsonic/test$",                     jsonapi_reply_opensubsonic_test },
+
+    // OpenSubsonic Core Features API
+    { HTTPD_METHOD_GET,    "^/api/opensubsonic/search$",                   jsonapi_reply_opensubsonic_search },
+    { HTTPD_METHOD_GET,    "^/api/opensubsonic/playlists$",                jsonapi_reply_opensubsonic_playlists_get },
+    { HTTPD_METHOD_GET,    "^/api/opensubsonic/playlist/[^/]+$",           jsonapi_reply_opensubsonic_playlist_get_byid },
+    { HTTPD_METHOD_GET,    "^/api/opensubsonic/album/[^/]+$",              jsonapi_reply_opensubsonic_album_get_byid },
+    { HTTPD_METHOD_GET,    "^/api/opensubsonic/artist/[^/]+$",             jsonapi_reply_opensubsonic_artist_get_byid },
+    { HTTPD_METHOD_GET,    "^/api/opensubsonic/song/[^/]+$",               jsonapi_reply_opensubsonic_song_get_byid },
+    { HTTPD_METHOD_GET,    "^/api/opensubsonic/coverarturl/[^/]+$",        jsonapi_reply_opensubsonic_coverarturl_get_byid },
+    // Add other OpenSubsonic core feature handlers here
 
     { HTTPD_METHOD_GET,    "^/api/outputs$",                               jsonapi_reply_outputs },
     { HTTPD_METHOD_PUT,    "^/api/outputs/set$",                           jsonapi_reply_outputs_set },

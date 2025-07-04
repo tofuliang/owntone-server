@@ -261,6 +261,21 @@ static cfg_opt_t sec_streaming[] =
     CFG_END()
   };
 
+/* OpenSubsonic section structure */
+static cfg_opt_t sec_opensubsonic[] =
+  {
+    CFG_BOOL("enabled", cfg_false, CFGF_NONE),
+    CFG_STR("server_url", NULL, CFGF_NONE),
+    CFG_STR("username", NULL, CFGF_NONE),
+    CFG_STR("password", NULL, CFGF_NONE),
+    CFG_STR("token", NULL, CFGF_NONE),
+    CFG_STR("salt", NULL, CFGF_NONE),
+    CFG_BOOL("legacy_auth", cfg_false, CFGF_NONE),
+    CFG_STR("client_name", "OwnTone", CFGF_NONE),
+    CFG_STR("api_version", "1.16.1", CFGF_NONE),
+    CFG_END()
+  };
+
 /* Config file structure */
 static cfg_opt_t toplvl_cfg[] =
   {
@@ -277,6 +292,7 @@ static cfg_opt_t toplvl_cfg[] =
     CFG_SEC("sqlite", sec_sqlite, CFGF_NONE),
     CFG_SEC("mpd", sec_mpd, CFGF_NONE),
     CFG_SEC("streaming", sec_streaming, CFGF_NONE),
+    CFG_SEC("opensubsonic", sec_opensubsonic, CFGF_NONE),
     CFG_END()
   };
 

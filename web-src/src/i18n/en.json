@@ -373,6 +373,22 @@
         "title": "Spotify",
         "user": "Access granted for {user}"
       },
+      "opensubsonic": {
+        "title": "OpenSubsonic",
+        "info": "Configure your OpenSubsonic server details to browse and play music.",
+        "server_url": "Server URL",
+        "server_url_placeholder": "e.g. http://yoursonic.example.com:4533",
+        "username": "Username",
+        "password": "Password",
+        "password_help": "Your password will be sent to the OwnTone backend. It is recommended to use a Subsonic user with restricted permissions if possible, and ensure your OwnTone configuration file has appropriate permissions.",
+        "save_success": "OpenSubsonic settings saved successfully.",
+        "save_failed": "Failed to save OpenSubsonic settings.",
+        "test_connection": "Test Connection",
+        "testing_connection": "Testing connection...",
+        "test_success": "Connection to OpenSubsonic server successful!",
+        "test_failed": "Failed to connect to OpenSubsonic server. Check URL, credentials, and server status.",
+        "no-support": "OpenSubsonic support not compiled in this version of OwnTone."
+      },
       "username": "Username"
     },
     "webinterface": {

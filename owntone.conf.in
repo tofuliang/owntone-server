@@ -411,6 +411,38 @@ spotify {
 #	album_override = false
 }
 
+# OpenSubsonic settings
+opensubsonic {
+	# Enable OpenSubsonic support
+	enabled = false
+
+	# URL of the OpenSubsonic server (e.g., http://yoursonic.example.com:4533)
+	server_url = ""
+
+	# Username for OpenSubsonic server
+	username = ""
+
+	# Password for OpenSubsonic server
+	# For security, it's better to use an API token if your server supports it.
+	# If using password, ensure this config file has restricted permissions.
+	password = ""
+
+	# Optional: API token (instead of password, if your server supports it)
+#	token = ""
+
+	# Optional: Salt for password hashing (if server requires pre-hashed password with salt)
+#	salt = ""
+
+	# Optional: Legacy authentication method (Subsonic pre-1.8.0 style)
+#	legacy_auth = false
+
+	# Application name to present to the Subsonic server
+	client_name = "OwnTone"
+
+	# API version to use (e.g., "1.16.1")
+	api_version = "1.16.1"
+}
+
 # RCP/Roku Soundbridge output settings
 # (make sure you get the capitalization of the device name right)
 #rcp "My SoundBridge device" {

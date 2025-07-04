@@ -89,6 +89,8 @@ owntone_SOURCES = main.c \
 	library/filescanner_ffmpeg.c library/filescanner_playlist.c \
 	library/filescanner_smartpl.c library/filescanner_itunes.c \
 	library/rssscanner.c \
+	library/opensubsonic_api.c library/opensubsonic_api.h \
+	library/opensubsonic_scanner.c library/opensubsonic_scanner.h \
 	library.c library.h \
 	$(MDNS_SRC) mdns.h \
 	remote_pairing.c remote_pairing.h \

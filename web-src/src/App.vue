@@ -87,6 +87,7 @@ export default {
       queue: [this.queueStore.initialise],
       settings: [this.settingsStore.initialise],
       spotify: [this.servicesStore.initialiseSpotify],
+      opensubsonic: [this.servicesStore.initialiseOpenSubsonic],
       update: [this.libraryStore.initialise],
       volume: [this.playerStore.initialise, this.outputsStore.initialise]
     }
@@ -162,6 +163,7 @@ export default {
         'queue',
         'settings',
         'spotify',
+        'opensubsonic',
         'update',
         'volume'
       ]

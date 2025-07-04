@@ -20,9 +20,23 @@ export const useServicesStore = defineStore('ServicesStore', {
           )
         }
       })
+    },
+    async initialiseOpenSubsonic() {
+      try {
+        this.opensubsonic = await services.opensubsonic.status()
+      } catch (error) {
+        console.error('Failed to initialize OpenSubsonic settings:', error)
+        this.opensubsonic = { enabled: false, configured: false, error: true }
+      }
     }
   },
   getters: {
+    isOpenSubsonicEnabled: (state) => state.opensubsonic.enabled,
+    isOpenSubsonicConfigured: (state) => state.opensubsonic.configured, // e.g. if URL and username are set
+    openSubsonicServerUrl: (state) => state.opensubsonic.server_url,
+    openSubsonicUsername: (state) => state.opensubsonic.username,
+    // Add other getters as needed, e.g., for connection status
+
     grantedSpotifyScopes: (state) =>
       state.spotify.webapi_granted_scope?.split(' ') ?? [],
     hasMissingSpotifyScopes: (state) => state.missingSpotifyScopes.length > 0,
@@ -41,5 +55,17 @@ export const useServicesStore = defineStore('ServicesStore', {
     requiredSpotifyScopes: (state) =>
       state.spotify.webapi_required_scope?.split(' ') ?? []
   },
-  state: () => ({ lastfm: {}, spotify: {}, spotifyTimerId: 0 })
+  state: () => ({
+    lastfm: {},
+    spotify: {},
+    opensubsonic: {
+      enabled: false, // Is the backend compiled with OpenSubsonic support
+      configured: false, // Are settings like URL/user/pass present
+      server_url: '',
+      username: '',
+      // password is not stored in the store, only sent to API
+      error: false // If there was an error fetching status
+    },
+    spotifyTimerId: 0
+  })
 })

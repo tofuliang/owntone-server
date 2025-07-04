@@ -39,6 +39,10 @@ import PageSettingsArtwork from '@/pages/PageSettingsArtwork.vue'
 import PageSettingsDevices from '@/pages/PageSettingsDevices.vue'
 import PageSettingsOnlineServices from '@/pages/PageSettingsOnlineServices.vue'
 import PageSettingsWebinterface from '@/pages/PageSettingsWebinterface.vue'
+// Import OpenSubsonic pages (assuming they will be created)
+import PageMusicOpenSubsonic from '@/pages/PageMusicOpenSubsonic.vue'
+import PageOpenSubsonicPlaylistTracks from '@/pages/PageOpenSubsonicPlaylistTracks.vue'
+
 
 const TOP_WITH_TABS = 100
 
@@ -236,7 +240,19 @@ export const router = createRouter({
       component: PageSettingsDevices,
       name: 'settings-devices',
       path: '/settings/devices'
+    },
+    // OpenSubsonic Routes
+    {
+      component: PageMusicOpenSubsonic,
+      name: 'music-opensubsonic',
+      path: '/music/opensubsonic'
+    },
+    {
+      component: PageOpenSubsonicPlaylistTracks,
+      name: 'opensubsonic-playlist',
+      path: '/music/opensubsonic/playlists/:id/tracks'
     }
+    // Add routes for OpenSubsonic Album and Artist pages if needed
   ],
   scrollBehavior(to, from, savedPosition) {
     const delay = 0

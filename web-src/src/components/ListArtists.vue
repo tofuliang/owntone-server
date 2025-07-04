@@ -5,6 +5,8 @@
     :is-item="item.isItem"
     :index="item.index"
     :lines="[item.item.name]"
+    :item-source="item.item.uri && item.item.uri.startsWith('opensubsonic:') ? 'opensubsonic' : 'local'"
+    :cover-art-id="item.item.coverArtId"
     @open="open(item.item)"
     @open-details="openDetails(item.item)"
   />

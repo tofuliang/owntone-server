@@ -10,6 +10,8 @@
       item.item.artist,
       $formatters.toDate(item.item.date_released)
     ]"
+    :item-source="item.item.uri && item.item.uri.startsWith('opensubsonic:') ? 'opensubsonic' : 'local'"
+    :cover-art-id="item.item.coverArtId"
     @open="open(item.item)"
     @open-details="openDetails(item.item)"
   />
@@ -47,9 +49,12 @@ export default {
     }
   },
   methods: {
-    image(item) {
+    image(item) { // This method provides the 'image' prop to ListItem
       if (this.settingsStore.showCoverArtworkInAlbumLists) {
-        return { caption: item.item.name, url: item.item.artwork_url }
+        // For OpenSubsonic items, ListItem will handle fetching via coverArtId if artwork_url is not directly provided
+        // If item.item.artwork_url is already a resolved URL (e.g. for local items), ListItem will use it.
+        // The 'itemSource' and 'coverArtId' props will be passed directly to ListItem below.
+        return { caption: item.item.name, url: item.item.artwork_url } // Keep existing logic for non-OS items
       }
       return null
     },
