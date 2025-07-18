@@ -2617,7 +2617,7 @@ curl --include \
 
 | Key                | Type     | Value                                     |
 | ------------------ | -------- | ----------------------------------------- |
-| id                 | integer  | Track id                                  |
+| id                 | string   | Track id                                  |
 | title              | string   | Title                                     |
 | title_sort         | string   | Sort title                                |
 | artist             | string   | Track artist name                         |

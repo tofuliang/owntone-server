@@ -130,6 +130,7 @@
     "files": "文件",
     "genres": "流派",
     "music": "音乐",
+    "opensubsonic": "OpenSubsonic",
     "playlists": "播放列表",
     "podcasts": "播客",
     "radio": "广播电台",
@@ -210,6 +211,7 @@
         "composers": "作曲家",
         "genres": "流派",
         "history": "历史",
+        "opensubsonic": "OpenSubsonic",
         "spotify": "Spotify"
       }
     },
@@ -268,6 +270,54 @@
         "featured-playlists": "特色列表",
         "new-releases": "最新发行"
       }
+    },
+    "opensubsonic": {
+      "connect": {
+        "title": "连接到 OpenSubsonic 服务器",
+        "server_url": "服务器地址",
+        "server_url_placeholder": "http://your-server:4533",
+        "username": "用户名",
+        "username_placeholder": "用户名",
+        "password": "密码",
+        "password_placeholder": "密码",
+        "button": "连接"
+      },
+      "status": {
+        "not_available": "OpenSubsonic 服务不可用。",
+        "loading": "正在加载 OpenSubsonic 数据...",
+        "connected": "已连接到 {server}",
+        "error": "连接失败：{error}"
+      },
+      "tabs": {
+        "artists": "艺人",
+        "albums": "专辑",
+        "playlists": "播放列表",
+        "search": "搜索"
+      },
+      "artists": {
+        "empty": "未找到艺人。",
+        "album_count": "{count} 张专辑"
+      },
+      "artist": {
+        "albums": "专辑"
+      },
+      "albums": {
+        "empty": "未找到专辑。",
+        "by_artist": "by {artist}"
+      },
+      "playlists": {
+        "empty": "未找到播放列表。",
+        "track_count": "{count} 首歌曲",
+        "by_owner": "by {owner}"
+      },
+      "search": {
+        "placeholder": "搜索艺人、专辑或歌曲...",
+        "artists": "艺人",
+        "albums": "专辑",
+        "songs": "歌曲",
+        "no_results": "未找到搜索结果"
+      },
+      "back": "返回"
     }
   },
   "player": {

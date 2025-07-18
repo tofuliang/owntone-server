@@ -32,6 +32,7 @@
               </div>
             </nav>
             <slot name="content" />
+            <slot />
             <div
               v-if="$slots.footer"
               class="is-flex is-justify-content-center mt-4"

@@ -46,6 +46,26 @@ export const router = createRouter({
   history: createWebHashHistory(),
   routes: [
     { path: '/:all(.*)*', redirect: '/' },
+    {
+      component: () => import('@/pages/PageMusicOpensubsonic.vue'),
+      name: 'music-opensubsonic',
+      path: '/music/opensubsonic'
+    },
+    {
+      component: () => import('@/pages/PageArtistOpensubsonic.vue'),
+      name: 'music-opensubsonic-artist',
+      path: '/music/opensubsonic/artists/:id'
+    },
+    {
+      component: () => import('@/pages/PageAlbumOpensubsonic.vue'),
+      name: 'music-opensubsonic-album',
+      path: '/music/opensubsonic/albums/:id'
+    },
+    {
+      component: () => import('@/pages/PagePlaylistTracksOpensubsonic.vue'),
+      name: 'playlist-opensubsonic',
+      path: '/playlists/opensubsonic/:id/tracks'
+    },
     { component: PageAbout, name: 'about', path: '/about' },
     { component: PageAlbum, name: 'music-album', path: '/music/albums/:id' },
     {

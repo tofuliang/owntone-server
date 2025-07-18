@@ -130,18 +130,17 @@ static const char *httpd_allow_origin;
 static int httpd_port;
 
 
-// The server is designed around a single thread listening for requests. When
+// The server is designed around HTTP threads listening for requests. When
 // received, the request is passed to a thread from the worker pool, where a
 // handler will process it and prepare a response for the httpd thread to send
-// back. The idea is that the httpd thread never blocks. The handler in the
+// back. The idea is that the httpd threads never block. The handler in the
 // worker thread can block, but shouldn't hold the thread if it is a long-
 // running request (e.g. a long poll), because then we can run out of worker
 // threads. The handler should use events to avoid this. Handlers, that are non-
 // blocking and where the response must not be delayed can use
 // HTTPD_HANDLER_REALTIME, then the httpd thread calls it directly (sync)
-// instead of the async worker. In short, you shouldn't need to increase the
-// below.
-#define THREADPOOL_NTHREADS 1
+// instead of the async worker. Increased to support concurrent HTTP requests.
+#define THREADPOOL_NTHREADS 16
 
 static struct evthr_pool *httpd_threadpool;
 

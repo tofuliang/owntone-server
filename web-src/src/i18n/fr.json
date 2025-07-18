@@ -130,6 +130,7 @@
     "files": "Fichiers",
     "genres": "Genres",
     "music": "Musique",
+    "opensubsonic": "OpenSubsonic",
     "playlists": "Listes de lecture",
     "podcasts": "Podcasts",
     "radio": "Radio",
@@ -210,6 +211,7 @@
         "composers": "Compositeurs",
         "genres": "Genres",
         "history": "Historique",
+        "opensubsonic": "OpenSubsonic",
         "spotify": "Spotify"
       }
     },
@@ -267,6 +269,54 @@
       "music": {
         "featured-playlists": "Listes de lecture en vedette",
         "new-releases": "Nouvelle sorties"
+      }
+    },
+    "opensubsonic": {
+      "connect": {
+        "title": "Se connecter au serveur OpenSubsonic",
+        "server_url": "URL du serveur",
+        "server_url_placeholder": "http://your-server:4533",
+        "username": "Nom d'utilisateur",
+        "username_placeholder": "Nom d'utilisateur",
+        "password": "Mot de passe",
+        "password_placeholder": "Mot de passe",
+        "button": "Se connecter"
+      },
+      "status": {
+        "not_available": "Le service OpenSubsonic n'est pas disponible.",
+        "loading": "Chargement des données OpenSubsonic...",
+        "connected": "Connecté à {server}",
+        "error": "Échec de la connexion : {error}"
+      },
+      "tabs": {
+        "artists": "Artistes",
+        "albums": "Albums",
+        "playlists": "Listes de lecture",
+        "search": "Recherche"
+      },
+      "artists": {
+        "empty": "Aucun artiste trouvé.",
+        "album_count": "{count} album|{count} albums"
+      },
+      "albums": {
+        "empty": "Aucun album trouvé.",
+        "by_artist": "par {artist}"
+      },
+      "playlists": {
+        "empty": "Aucune liste de lecture trouvée.",
+        "track_count": "{count} piste|{count} pistes",
+        "by_owner": "par {owner}"
+      },
+      "search": {
+        "placeholder": "Rechercher des artistes, albums ou chansons...",
+        "artists": "Artistes",
+        "albums": "Albums",
+        "songs": "Chansons",
+        "no_results": "Aucun résultat de recherche trouvé"
+      },
+      "back": "Retour",
+      "artist": {
+        "albums": "Albums"
       }
     }
   },

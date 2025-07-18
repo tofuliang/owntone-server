@@ -43,7 +43,7 @@
 #include "evthr.h"
 #include "misc.h"
 
-#define THREADPOOL_NTHREADS 4
+#define THREADPOOL_NTHREADS 16
 
 static struct evthr_pool *worker_threadpool;
 static __thread struct evthr *worker_thr;

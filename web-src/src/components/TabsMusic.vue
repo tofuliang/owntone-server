@@ -48,6 +48,13 @@ export default {
           to: { name: 'music-spotify' }
         })
       }
+      if (this.servicesStore.isOpensubsonicEnabled) {
+        links.push({
+          icon: 'music-box-multiple',
+          key: 'page.music.tabs.opensubsonic',
+          to: { name: 'music-opensubsonic' }
+        })
+      }
       return links
     }
   }

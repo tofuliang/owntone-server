@@ -5,6 +5,7 @@
     :is-item="item.isItem"
     :index="item.index"
     :lines="[item.item.name]"
+    :image="getArtistImage(item.item)"
     @open="open(item.item)"
     @open-details="openDetails(item.item)"
   />
@@ -39,6 +40,12 @@ export default {
     openDetails(item) {
       this.selectedItem = item
       this.showDetailsModal = true
+    },
+    getArtistImage(item) {
+      if (item.artwork_url) {
+        return { url: item.artwork_url, caption: item.name }
+      }
+      return null
     }
   }
 }

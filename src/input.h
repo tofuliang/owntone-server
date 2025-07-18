@@ -22,6 +22,7 @@ enum input_types
 #ifdef SPOTIFY_LIBSPOTIFY
   INPUT_TYPE_LIBSPOTIFY,
 #endif
+  INPUT_TYPE_OPENSUBSONIC,
 };
 
 enum input_flags

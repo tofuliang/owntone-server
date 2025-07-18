@@ -130,6 +130,7 @@
     "files": "Files",
     "genres": "Genres",
     "music": "Music",
+    "opensubsonic": "OpenSubsonic",
     "playlists": "Playlists",
     "podcasts": "Podcasts",
     "radio": "Radio",
@@ -210,8 +211,57 @@
         "composers": "Composers",
         "genres": "Genres",
         "history": "History",
+        "opensubsonic": "OpenSubsonic",
         "spotify": "Spotify"
       }
+    },
+    "opensubsonic": {
+      "connect": {
+        "title": "Connect to OpenSubsonic Server",
+        "server_url": "Server URL",
+        "server_url_placeholder": "http://your-server:4533",
+        "username": "Username",
+        "username_placeholder": "Username",
+        "password": "Password",
+        "password_placeholder": "Password",
+        "button": "Connect"
+      },
+      "status": {
+        "not_available": "OpenSubsonic service is not available.",
+        "loading": "Loading OpenSubsonic data...",
+        "connected": "Connected to {server}",
+        "error": "Failed to connect: {error}"
+      },
+      "tabs": {
+        "artists": "Artists",
+        "albums": "Albums",
+        "playlists": "Playlists",
+        "search": "Search"
+      },
+      "artists": {
+        "empty": "No artists found.",
+        "album_count": "{count} album|{count} albums"
+      },
+      "artist": {
+        "albums": "Albums"
+      },
+      "albums": {
+        "empty": "No albums found.",
+        "by_artist": "by {artist}"
+      },
+      "playlists": {
+        "empty": "No playlists found.",
+        "track_count": "{count} track|{count} tracks",
+        "by_owner": "by {owner}"
+      },
+      "search": {
+        "placeholder": "Search artists, albums or songs...",
+        "artists": "Artists",
+        "albums": "Albums",
+        "songs": "Songs",
+        "no_results": "No search results found"
+      },
+      "back": "Back"
     },
     "player": {
       "info": "Add some tracks by browsing your library",

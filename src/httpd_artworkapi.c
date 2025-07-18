@@ -29,6 +29,7 @@
 #include "misc.h"
 #include "player.h"
 #include "artwork.h"
+#include "library/opensubsonic_webapi.h"
 
 static int
 request_process(struct httpd_request *hreq, uint32_t *max_w, uint32_t *max_h)
@@ -134,11 +135,53 @@ artworkapi_reply_group(struct httpd_request *hreq)
   return response_process(hreq, ret);
 }
 
+static int
+artworkapi_reply_opensubsonic(struct httpd_request *hreq)
+{
+  uint32_t max_w;
+  uint32_t max_h;
+  char *artwork_url;
+  char *artwork_id;
+  int ret;
+
+  ret = request_process(hreq, &max_w, &max_h);
+  if (ret != 0)
+    return ret;
+
+  // Extract artwork ID from path: /artwork/opensubsonic/al-xxx_xxx
+  artwork_id = hreq->path_parts[2];
+  if (!artwork_id)
+  {
+    DPRINTF(E_LOG, L_HTTPD, "OpenSubsonic artwork: missing artwork ID\n");
+    return HTTP_BADREQUEST;
+  }
+
+  DPRINTF(E_DBG, L_HTTPD, "OpenSubsonic artwork request for ID: %s (max_w=%d, max_h=%d)\n",
+          artwork_id, max_w, max_h);
+
+  // Get artwork URL from OpenSubsonic
+  artwork_url = opensubsonic_artwork_url_get(artwork_id, max_w, max_h);
+  if (!artwork_url)
+  {
+    DPRINTF(E_LOG, L_HTTPD, "OpenSubsonic artwork: failed to get artwork URL for ID: %s\n", artwork_id);
+    return HTTP_NOTFOUND;
+  }
+
+  DPRINTF(E_DBG, L_HTTPD, "OpenSubsonic artwork: redirecting to %s\n", artwork_url);
+
+  // Send 302 redirect to the actual OpenSubsonic artwork URL
+  httpd_header_add(hreq->out_headers, "Location", artwork_url);
+
+  free(artwork_url);
+  return HTTP_MOVETEMP; // 302 Temporary Redirect
+}
+
 static struct httpd_uri_map artworkapi_handlers[] =
 {
   { HTTPD_METHOD_GET, "^/artwork/nowplaying$",         artworkapi_reply_nowplaying },
   { HTTPD_METHOD_GET, "^/artwork/item/[[:digit:]]+$",  artworkapi_reply_item },
   { HTTPD_METHOD_GET, "^/artwork/group/[[:digit:]]+$", artworkapi_reply_group },
+  { HTTPD_METHOD_GET, "^/artwork/opensubsonic/.+$",    artworkapi_reply_opensubsonic },
   { 0, NULL, NULL }
 };
 
@@ -152,6 +195,8 @@ artworkapi_request(struct httpd_request *hreq)
 
   if (!httpd_request_is_authorized(hreq))
     return;
+
+  DPRINTF(E_DBG, L_WEB, "Artwork API request: '%s', handler: %p\n", hreq->uri, hreq->handler);
 
   if (!hreq->handler)
     {
@@ -170,6 +215,9 @@ artworkapi_request(struct httpd_request *hreq)
 	break;
       case HTTP_NOCONTENT:           /* 204 No Content */
 	httpd_send_reply(hreq, status_code, "No Content", HTTPD_SEND_NO_GZIP);
+	break;
+      case HTTP_MOVETEMP:            /* 302 Temporary Redirect */
+	httpd_send_reply(hreq, status_code, "Found", HTTPD_SEND_NO_GZIP);
 	break;
       case HTTP_NOTMODIFIED:         /* 304 Not Modified */
 	httpd_send_reply(hreq, HTTP_NOTMODIFIED, NULL, HTTPD_SEND_NO_GZIP);

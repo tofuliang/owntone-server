@@ -97,6 +97,12 @@ export default {
           sub: true
         },
         {
+          key: 'navigation.opensubsonic',
+          name: 'music-opensubsonic',
+          show: this.servicesStore.isOpensubsonicEnabled,
+          sub: true
+        },
+        {
           icon: 'microphone',
           key: 'navigation.podcasts',
           name: 'podcasts',

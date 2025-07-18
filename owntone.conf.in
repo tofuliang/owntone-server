@@ -411,6 +411,34 @@ spotify {
 #	album_override = false
 }
 
+# OpenSubsonic settings
+opensubsonic {
+	# Enable OpenSubsonic integration
+#	enabled = false
+
+	# OpenSubsonic server URL (e.g., "http://localhost:4533")
+#	server_url = ""
+
+	# Authentication credentials
+#	username = ""
+#	password = ""
+
+	# API version to use (default: "1.16.1")
+#	api_version = "1.16.1"
+
+	# Client name for API requests
+#	client_name = "OwnTone"
+
+	# Request timeout in seconds
+#	timeout = 30
+
+	# Enable/disable album artwork fetching
+#	artwork_enabled = true
+
+	# Maximum artwork size
+#	artwork_max_size = 600
+}
+
 # RCP/Roku Soundbridge output settings
 # (make sure you get the capitalization of the device name right)
 #rcp "My SoundBridge device" {

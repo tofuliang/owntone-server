@@ -605,6 +605,7 @@ static const struct enum_label scan_kind_labels[] =
     { SCAN_KIND_FILES,      "files" },
     { SCAN_KIND_SPOTIFY,    "spotify" },
     { SCAN_KIND_RSS,        "rss" },
+    { SCAN_KIND_OPENSUBSONIC, "opensubsonic" },
   };
 
 const char *

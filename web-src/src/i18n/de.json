@@ -130,6 +130,7 @@
     "files": "Dateien",
     "genres": "Genres",
     "music": "Musik",
+    "opensubsonic": "OpenSubsonic",
     "playlists": "Playlisten",
     "podcasts": "Podcasts",
     "radio": "Radio",
@@ -210,6 +211,7 @@
         "composers": "Komponisten",
         "genres": "Genres",
         "history": "Verlauf",
+        "opensubsonic": "OpenSubsonic",
         "spotify": "Spotify"
       }
     },
@@ -267,6 +269,54 @@
       "music": {
         "featured-playlists": "Ausgezeichnete Playlisten",
         "new-releases": "Neuvorstellung"
+      }
+    },
+    "opensubsonic": {
+      "connect": {
+        "title": "Mit OpenSubsonic Server verbinden",
+        "server_url": "Server-URL",
+        "server_url_placeholder": "http://your-server:4533",
+        "username": "Benutzername",
+        "username_placeholder": "Benutzername",
+        "password": "Passwort",
+        "password_placeholder": "Passwort",
+        "button": "Verbinden"
+      },
+      "status": {
+        "not_available": "OpenSubsonic-Dienst ist nicht verfügbar.",
+        "loading": "OpenSubsonic-Daten werden geladen...",
+        "connected": "Verbunden mit {server}",
+        "error": "Verbindung fehlgeschlagen: {error}"
+      },
+      "tabs": {
+        "artists": "Künstler",
+        "albums": "Alben",
+        "playlists": "Wiedergabelisten",
+        "search": "Suche"
+      },
+      "artists": {
+        "empty": "Keine Künstler gefunden.",
+        "album_count": "{count} Album|{count} Alben"
+      },
+      "albums": {
+        "empty": "Keine Alben gefunden.",
+        "by_artist": "von {artist}"
+      },
+      "playlists": {
+        "empty": "Keine Wiedergabelisten gefunden.",
+        "track_count": "{count} Titel|{count} Titel",
+        "by_owner": "von {owner}"
+      },
+      "search": {
+        "placeholder": "Künstler, Alben oder Titel suchen...",
+        "artists": "Künstler",
+        "albums": "Alben",
+        "songs": "Titel",
+        "no_results": "Keine Suchergebnisse gefunden"
+      },
+      "back": "Zurück",
+      "artist": {
+        "albums": "Alben"
       }
     }
   },

@@ -158,7 +158,11 @@ http_client_request(struct http_client_ctx *ctx, struct http_client_session *ses
   else if (ctx->output_body)
     curl_easy_setopt(curl, CURLOPT_POSTFIELDS, ctx->output_body); // POST request
 
-  curl_easy_setopt(curl, CURLOPT_TIMEOUT, HTTP_CLIENT_TIMEOUT);
+  // Use custom timeout if specified, otherwise use default
+  if (ctx->timeout > 0)
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, ctx->timeout);
+  else
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, HTTP_CLIENT_TIMEOUT);
   curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_request_cb);
   curl_easy_setopt(curl, CURLOPT_WRITEDATA, ctx);
 

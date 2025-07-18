@@ -47,6 +47,8 @@
 # include "lastfm.h"
 #endif
 #include "library.h"
+#include "inputs/opensubsonic.h"
+#include "library/opensubsonic_webapi.h"
 #include "listenbrainz.h"
 #include "logger.h"
 #include "misc.h"
@@ -79,7 +81,6 @@ static const struct track_attribs track_attribs[] =
 
 static bool allow_modifying_stored_playlists;
 static char *default_playlist_directory;
-
 
 /* -------------------------------- HELPERS --------------------------------- */
 
@@ -1339,6 +1340,738 @@ jsonapi_reply_spotify_logout(struct httpd_request *hreq)
   return HTTP_NOCONTENT;
 }
 
+/*
+ * Endpoint to retrieve information about the OpenSubsonic integration
+ *
+ * Example response:
+ *
+ * {
+ *  "enabled": true,
+ *  "connected": true,
+ *  "server_url": "http://localhost:4533",
+ *  "username": "admin"
+ * }
+ */
+static int
+jsonapi_reply_opensubsonic(struct httpd_request *hreq)
+{
+  json_object *jreply;
+  struct opensubsonic_status_info info;
+
+  CHECK_NULL(L_WEB, jreply = json_object_new_object());
+
+  opensubsonic_status_info_get(&info);
+
+  json_object_object_add(jreply, "enabled", json_object_new_boolean(info.enabled));
+  json_object_object_add(jreply, "connected", json_object_new_boolean(info.connected));
+  safe_json_add_string(jreply, "server_url", info.server_url);
+  safe_json_add_string(jreply, "username", info.username);
+  safe_json_add_string(jreply, "api_version", info.api_version);
+  safe_json_add_string(jreply, "client_name", info.client_name);
+  json_object_object_add(jreply, "timeout", json_object_new_int(info.timeout));
+  json_object_object_add(jreply, "artwork_enabled", json_object_new_boolean(info.artwork_enabled));
+  json_object_object_add(jreply, "artwork_max_size", json_object_new_int(info.artwork_max_size));
+
+  CHECK_ERRNO(L_WEB, evbuffer_add_printf(hreq->out_body, "%s", json_object_to_json_string(jreply)));
+
+  jparse_free(jreply);
+
+  return HTTP_OK;
+}
+
+/*
+ * Endpoint to get artists from OpenSubsonic server
+ */
+static int
+jsonapi_reply_opensubsonic_artists(struct httpd_request *hreq)
+{
+  json_object *response;
+  json_object *subsonic_response;
+  json_object *artists_obj;
+
+  response = opensubsonic_request_artists();
+  if (!response)
+    return HTTP_INTERNAL;
+
+  // Convert OpenSubsonic response to OwnTone format
+  json_object *jreply = json_object_new_object();
+  json_object *items = json_object_new_array();
+  json_object *artist_list;
+  int i, len;
+
+  if (json_object_object_get_ex(response, "subsonic-response", &subsonic_response) &&
+      json_object_object_get_ex(subsonic_response, "artists", &artists_obj) &&
+      json_object_object_get_ex(artists_obj, "index", &artist_list))
+    {
+      len = json_object_array_length(artist_list);
+      for (i = 0; i < len; i++)
+        {
+          json_object *index = json_object_array_get_idx(artist_list, i);
+          json_object *artists;
+          if (json_object_object_get_ex(index, "artist", &artists))
+            {
+              int j, artists_len = json_object_array_length(artists);
+              for (j = 0; j < artists_len; j++)
+                {
+                  json_object *artist = json_object_array_get_idx(artists, j);
+                  json_object *converted = json_object_new_object();
+
+                  // Convert to OwnTone format
+                  const char *id = jparse_str_from_obj(artist, "id");
+                  const char *name = jparse_str_from_obj(artist, "name");
+                  const char *cover_art = jparse_str_from_obj(artist, "coverArt");
+                  const char *artist_image_url = jparse_str_from_obj(artist, "artistImageUrl");
+                  int album_count = jparse_int_from_obj(artist, "albumCount");
+
+                  json_object_object_add(converted, "id", json_object_new_string(id));
+                  json_object_object_add(converted, "name", json_object_new_string(name));
+                  json_object_object_add(converted, "album_count", json_object_new_int(album_count));
+                  safe_json_add_string(converted, "uri", safe_asprintf("opensubsonic:artist:%s", id));
+
+                  // Prioritize artistImageUrl over coverArt for artwork
+                  if (artist_image_url && strlen(artist_image_url) > 0)
+                    {
+                      safe_json_add_string(converted, "artwork_url", artist_image_url);
+                    }
+                  else if (cover_art && strlen(cover_art) > 0)
+                    {
+                      safe_json_add_string(converted, "artwork_url", safe_asprintf("./artwork/opensubsonic/%s", cover_art));
+                    }
+
+                  json_object_array_add(items, converted);
+                }
+            }
+        }
+    }
+
+  json_object_object_add(jreply, "items", items);
+  json_object_object_add(jreply, "total", json_object_new_int(json_object_array_length(items)));
+  json_object_object_add(jreply, "offset", json_object_new_int(0));
+  json_object_object_add(jreply, "limit", json_object_new_int(json_object_array_length(items)));
+
+  CHECK_ERRNO(L_WEB, evbuffer_add_printf(hreq->out_body, "%s", json_object_to_json_string(jreply)));
+
+  jparse_free(jreply);
+
+  jparse_free(response);
+  return HTTP_OK;
+}
+
+/*
+ * Forward declarations for OpenSubsonic conversion functions
+ */
+static json_object *opensubsonic_track_to_owntone(json_object *os_track, const char *context_type, const char *context_id);
+static json_object *opensubsonic_album_to_owntone(json_object *os_album);
+static json_object *opensubsonic_artist_to_owntone(json_object *os_artist);
+static json_object *opensubsonic_playlist_to_owntone(json_object *os_playlist);
+
+/*
+ * Convert OpenSubsonic track to OwnTone format
+ */
+static json_object *
+opensubsonic_track_to_owntone(json_object *os_track, const char *context_type, const char *context_id)
+{
+  json_object *owntone_track;
+  const char *id, *title, *artist, *album, *cover_art, *suffix;
+  int duration, bit_rate, track_number, year, size;
+  char *uri;
+
+  // Validate input
+  if (!os_track)
+  {
+    DPRINTF(E_LOG, L_WEB, "opensubsonic_track_to_owntone: NULL input track\n");
+    return NULL;
+  }
+
+  owntone_track = json_object_new_object();
+  if (!owntone_track)
+  {
+    DPRINTF(E_LOG, L_WEB, "opensubsonic_track_to_owntone: Failed to create JSON object\n");
+    return NULL;
+  }
+
+  id = jparse_str_from_obj(os_track, "id");
+  title = jparse_str_from_obj(os_track, "title");
+  artist = jparse_str_from_obj(os_track, "artist");
+  album = jparse_str_from_obj(os_track, "album");
+  cover_art = jparse_str_from_obj(os_track, "coverArt");
+  suffix = jparse_str_from_obj(os_track, "suffix");
+  const char *album_id = jparse_str_from_obj(os_track, "albumId");
+  duration = jparse_int_from_obj(os_track, "duration");
+  bit_rate = jparse_int_from_obj(os_track, "bitRate");
+  track_number = jparse_int_from_obj(os_track, "track");
+  year = jparse_int_from_obj(os_track, "year");
+  size = jparse_int_from_obj(os_track, "size");
+
+  // Validate required fields
+  if (!id || !title)
+  {
+    DPRINTF(E_LOG, L_WEB, "opensubsonic_track_to_owntone: Missing required fields (id=%s, title=%s)\n",
+            id ? id : "NULL", title ? title : "NULL");
+    json_object_put(owntone_track);
+    return NULL;
+  }
+
+  // Generate URI based on context: os:trackId:a:albumId or os:trackId:p:playlistId
+  if (context_type && context_id)
+  {
+    if (strcmp(context_type, "album") == 0)
+    {
+      uri = safe_asprintf("os:%s:a:%s", id, context_id);
+    }
+    else if (strcmp(context_type, "playlist") == 0)
+    {
+      uri = safe_asprintf("os:%s:p:%s", id, context_id);
+    }
+    else
+    {
+      // Fallback to simple format
+      uri = safe_asprintf("os:%s", id);
+    }
+  }
+  else
+  {
+    // Fallback to simple format when no context available
+    uri = safe_asprintf("os:%s", id);
+  }
+
+  // Use UUID string directly as per updated OwnTone JSON API spec
+  safe_json_add_string(owntone_track, "id", id);
+  safe_json_add_string(owntone_track, "title", title);
+  safe_json_add_string(owntone_track, "title_sort", title);
+  safe_json_add_string(owntone_track, "artist", artist ? artist : "Unknown Artist");
+  safe_json_add_string(owntone_track, "album", album ? album : "Unknown Album");
+  safe_json_add_string(owntone_track, "album_artist", artist ? artist : "Unknown Artist");
+  safe_json_add_string(owntone_track, "album_id", album_id);
+  json_object_object_add(owntone_track, "length_ms", json_object_new_int(duration * 1000));
+  json_object_object_add(owntone_track, "track_number", json_object_new_int(track_number));
+  json_object_object_add(owntone_track, "year", json_object_new_int(year));
+  json_object_object_add(owntone_track, "bitrate", json_object_new_int(bit_rate * 1000));
+  json_object_object_add(owntone_track, "file_size", json_object_new_int(size));
+  safe_json_add_string(owntone_track, "type", suffix);
+  safe_json_add_string(owntone_track, "uri", uri);
+  safe_json_add_string(owntone_track, "artwork_url", cover_art ? safe_asprintf("./artwork/opensubsonic/%s", cover_art) : NULL);
+  safe_json_add_string(owntone_track, "data_kind", "opensubsonic");
+  safe_json_add_string(owntone_track, "media_kind", "music");
+
+  free(uri);
+  return owntone_track;
+}
+
+/*
+ * Endpoint to get artist details from OpenSubsonic server
+ * URL: /api/opensubsonic/artists/{id}
+ */
+static int
+jsonapi_reply_opensubsonic_artist(struct httpd_request *hreq)
+{
+  json_object *response;
+  json_object *subsonic_response;
+  json_object *artist_obj;
+  json_object *album_array;
+  json_object *owntone_response;
+  json_object *owntone_albums;
+  const char *artist_id;
+  int i;
+
+  artist_id = hreq->path_parts[3]; // /api/opensubsonic/artists/{id}
+  if (!artist_id)
+    return HTTP_BADREQUEST;
+
+  response = opensubsonic_request_artist(artist_id);
+  if (!response)
+    return HTTP_INTERNAL;
+
+  owntone_response = json_object_new_object();
+  owntone_albums = json_object_new_array();
+
+  // Extract the artist data from the OpenSubsonic response
+  if (json_object_object_get_ex(response, "subsonic-response", &subsonic_response) &&
+      json_object_object_get_ex(subsonic_response, "artist", &artist_obj))
+    {
+      // Add artist info
+      const char *name = jparse_str_from_obj(artist_obj, "name");
+      const char *cover_art = jparse_str_from_obj(artist_obj, "coverArt");
+      int album_count = jparse_int_from_obj(artist_obj, "albumCount");
+
+      safe_json_add_string(owntone_response, "id", artist_id);
+      safe_json_add_string(owntone_response, "name", name);
+      json_object_object_add(owntone_response, "album_count", json_object_new_int(album_count));
+      safe_json_add_string(owntone_response, "data_kind", "opensubsonic");
+
+      // Add coverArt if available
+      if (cover_art && strlen(cover_art) > 0)
+        {
+          safe_json_add_string(owntone_response, "artwork_url", safe_asprintf("./artwork/opensubsonic/%s", cover_art));
+        }
+
+      // Convert albums
+      if (json_object_object_get_ex(artist_obj, "album", &album_array))
+        {
+          for (i = 0; i < json_object_array_length(album_array); i++)
+            {
+              json_object *os_album = json_object_array_get_idx(album_array, i);
+              json_object *owntone_album = opensubsonic_album_to_owntone(os_album);
+              json_object_array_add(owntone_albums, owntone_album);
+            }
+        }
+    }
+
+  json_object_object_add(owntone_response, "albums", owntone_albums);
+
+  CHECK_ERRNO(L_WEB, evbuffer_add_printf(hreq->out_body, "%s", json_object_to_json_string(owntone_response)));
+
+  jparse_free(response);
+  jparse_free(owntone_response);
+  return HTTP_OK;
+}
+
+/*
+ * Convert OpenSubsonic album to OwnTone format
+ */
+static json_object *
+opensubsonic_album_to_owntone(json_object *os_album)
+{
+  json_object *owntone_album;
+  const char *id, *name, *artist, *artist_id, *cover_art;
+  int song_count, duration, year;
+
+  // Validate input
+  if (!os_album)
+  {
+    DPRINTF(E_LOG, L_WEB, "opensubsonic_album_to_owntone: NULL input album\n");
+    return NULL;
+  }
+
+  owntone_album = json_object_new_object();
+  if (!owntone_album)
+  {
+    DPRINTF(E_LOG, L_WEB, "opensubsonic_album_to_owntone: Failed to create JSON object\n");
+    return NULL;
+  }
+
+  // Extract fields with validation
+  id = jparse_str_from_obj(os_album, "id");
+  name = jparse_str_from_obj(os_album, "name");
+  artist = jparse_str_from_obj(os_album, "artist");
+  artist_id = jparse_str_from_obj(os_album, "artistId");
+  cover_art = jparse_str_from_obj(os_album, "coverArt");
+  song_count = jparse_int_from_obj(os_album, "songCount");
+  duration = jparse_int_from_obj(os_album, "duration");
+  year = jparse_int_from_obj(os_album, "year");
+
+  // Validate required fields
+  if (!id || !name)
+  {
+    DPRINTF(E_LOG, L_WEB, "opensubsonic_album_to_owntone: Missing required fields (id=%s, name=%s)\n",
+            id ? id : "NULL", name ? name : "NULL");
+    json_object_put(owntone_album);
+    return NULL;
+  }
+
+  // Build OwnTone album object
+  safe_json_add_string(owntone_album, "id", id);
+  safe_json_add_string(owntone_album, "name", name);
+  safe_json_add_string(owntone_album, "name_sort", name);
+  safe_json_add_string(owntone_album, "artist_id", artist_id ? artist_id : "");
+  safe_json_add_string(owntone_album, "artist", artist ? artist : "Unknown Artist");
+  json_object_object_add(owntone_album, "track_count", json_object_new_int(song_count > 0 ? song_count : 0));
+  json_object_object_add(owntone_album, "length_ms", json_object_new_int(duration > 0 ? duration * 1000 : 0));
+  json_object_object_add(owntone_album, "year", json_object_new_int(year > 0 ? year : 0));
+  safe_json_add_string(owntone_album, "uri", safe_asprintf("opensubsonic:album:%s", id));
+  safe_json_add_string(owntone_album, "artwork_url", cover_art ? safe_asprintf("./artwork/opensubsonic/%s", cover_art) : NULL);
+  safe_json_add_string(owntone_album, "data_kind", "opensubsonic");
+
+  return owntone_album;
+}
+
+/*
+ * Convert OpenSubsonic artist to OwnTone format
+ */
+static json_object *
+opensubsonic_artist_to_owntone(json_object *os_artist)
+{
+  json_object *owntone_artist;
+  const char *id, *name, *cover_art, *artist_image_url;
+  int album_count;
+
+  owntone_artist = json_object_new_object();
+
+  id = jparse_str_from_obj(os_artist, "id");
+  name = jparse_str_from_obj(os_artist, "name");
+  cover_art = jparse_str_from_obj(os_artist, "coverArt");
+  artist_image_url = jparse_str_from_obj(os_artist, "artistImageUrl");
+  album_count = jparse_int_from_obj(os_artist, "albumCount");
+
+  safe_json_add_string(owntone_artist, "id", id);
+  safe_json_add_string(owntone_artist, "name", name);
+  safe_json_add_string(owntone_artist, "name_sort", name);
+  json_object_object_add(owntone_artist, "album_count", json_object_new_int(album_count));
+  json_object_object_add(owntone_artist, "track_count", json_object_new_int(0));
+  json_object_object_add(owntone_artist, "length_ms", json_object_new_int(0));
+  safe_json_add_string(owntone_artist, "uri", safe_asprintf("opensubsonic:artist:%s", id));
+  safe_json_add_string(owntone_artist, "data_kind", "opensubsonic");
+
+  // Prioritize artistImageUrl over coverArt for artwork
+  if (artist_image_url && strlen(artist_image_url) > 0)
+    {
+      safe_json_add_string(owntone_artist, "artwork_url", artist_image_url);
+    }
+  else if (cover_art && strlen(cover_art) > 0)
+    {
+      safe_json_add_string(owntone_artist, "artwork_url", safe_asprintf("./artwork/opensubsonic/%s", cover_art));
+    }
+
+  return owntone_artist;
+}
+
+/*
+ * Endpoint to get albums from OpenSubsonic server
+ */
+static int
+jsonapi_reply_opensubsonic_albums(struct httpd_request *hreq)
+{
+  json_object *response;
+  json_object *subsonic_response;
+  json_object *albumlist_obj;
+  json_object *album_array;
+  json_object *owntone_response;
+  json_object *owntone_albums;
+  int i;
+
+  response = opensubsonic_request_albums();
+  if (!response)
+    return HTTP_INTERNAL;
+
+  owntone_response = json_object_new_object();
+  owntone_albums = json_object_new_array();
+
+  // Extract the album list data from the OpenSubsonic response
+  if (json_object_object_get_ex(response, "subsonic-response", &subsonic_response) &&
+      json_object_object_get_ex(subsonic_response, "albumList2", &albumlist_obj) &&
+      json_object_object_get_ex(albumlist_obj, "album", &album_array))
+    {
+      for (i = 0; i < json_object_array_length(album_array); i++)
+        {
+          json_object *os_album = json_object_array_get_idx(album_array, i);
+          json_object *owntone_album = opensubsonic_album_to_owntone(os_album);
+          json_object_array_add(owntone_albums, owntone_album);
+        }
+    }
+
+  json_object_object_add(owntone_response, "items", owntone_albums);
+  json_object_object_add(owntone_response, "total", json_object_new_int(json_object_array_length(owntone_albums)));
+  json_object_object_add(owntone_response, "offset", json_object_new_int(0));
+  json_object_object_add(owntone_response, "limit", json_object_new_int(-1));
+
+  CHECK_ERRNO(L_WEB, evbuffer_add_printf(hreq->out_body, "%s", json_object_to_json_string(owntone_response)));
+
+  jparse_free(response);
+  jparse_free(owntone_response);
+  return HTTP_OK;
+}
+
+/*
+ * Endpoint to get album details from OpenSubsonic server
+ * URL: /api/opensubsonic/albums/{id}
+ */
+static int
+jsonapi_reply_opensubsonic_album(struct httpd_request *hreq)
+{
+  json_object *response;
+  json_object *subsonic_response;
+  json_object *album_obj;
+  json_object *song_array;
+  json_object *owntone_response;
+  json_object *owntone_tracks;
+  const char *album_id;
+  int i;
+
+  album_id = hreq->path_parts[3]; // /api/opensubsonic/albums/{id}
+  if (!album_id)
+    return HTTP_BADREQUEST;
+
+  response = opensubsonic_request_album(album_id);
+  if (!response)
+    return HTTP_INTERNAL;
+
+  owntone_response = json_object_new_object();
+  owntone_tracks = json_object_new_array();
+
+  // Extract the album data from the OpenSubsonic response
+  if (json_object_object_get_ex(response, "subsonic-response", &subsonic_response) &&
+      json_object_object_get_ex(subsonic_response, "album", &album_obj))
+    {
+      // Add album info
+      const char *name = jparse_str_from_obj(album_obj, "name");
+      const char *artist = jparse_str_from_obj(album_obj, "artist");
+      const char *artist_id = jparse_str_from_obj(album_obj, "artistId");
+      const char *cover_art = jparse_str_from_obj(album_obj, "coverArt");
+      int song_count = jparse_int_from_obj(album_obj, "songCount");
+      int duration = jparse_int_from_obj(album_obj, "duration");
+      int year = jparse_int_from_obj(album_obj, "year");
+
+      safe_json_add_string(owntone_response, "id", album_id);
+      safe_json_add_string(owntone_response, "name", name);
+      safe_json_add_string(owntone_response, "artist", artist);
+      safe_json_add_string(owntone_response, "artist_id", artist_id);
+      json_object_object_add(owntone_response, "track_count", json_object_new_int(song_count));
+      json_object_object_add(owntone_response, "length_ms", json_object_new_int(duration * 1000));
+      json_object_object_add(owntone_response, "year", json_object_new_int(year));
+      safe_json_add_string(owntone_response, "artwork_url", cover_art ? safe_asprintf("./artwork/opensubsonic/%s", cover_art) : NULL);
+      safe_json_add_string(owntone_response, "data_kind", "opensubsonic");
+
+      // Convert tracks
+      if (json_object_object_get_ex(album_obj, "song", &song_array))
+        {
+          for (i = 0; i < json_object_array_length(song_array); i++)
+            {
+              json_object *os_track = json_object_array_get_idx(song_array, i);
+              json_object *owntone_track = opensubsonic_track_to_owntone(os_track, "album", album_id);
+              json_object_array_add(owntone_tracks, owntone_track);
+            }
+        }
+    }
+
+  json_object_object_add(owntone_response, "tracks", owntone_tracks);
+
+  CHECK_ERRNO(L_WEB, evbuffer_add_printf(hreq->out_body, "%s", json_object_to_json_string(owntone_response)));
+
+  jparse_free(response);
+  jparse_free(owntone_response);
+  return HTTP_OK;
+}
+
+/*
+ * Convert OpenSubsonic playlist to OwnTone format
+ */
+static json_object *
+opensubsonic_playlist_to_owntone(json_object *os_playlist)
+{
+  json_object *owntone_playlist;
+  const char *id, *name, *owner, *cover_art;
+  int song_count;
+
+  owntone_playlist = json_object_new_object();
+
+  id = jparse_str_from_obj(os_playlist, "id");
+  name = jparse_str_from_obj(os_playlist, "name");
+  owner = jparse_str_from_obj(os_playlist, "owner");
+  cover_art = jparse_str_from_obj(os_playlist, "coverArt");
+  song_count = jparse_int_from_obj(os_playlist, "songCount");
+
+  safe_json_add_string(owntone_playlist, "id", id);
+  safe_json_add_string(owntone_playlist, "name", name);
+  safe_json_add_string(owntone_playlist, "owner", owner);
+  safe_json_add_string(owntone_playlist, "path", safe_asprintf("opensubsonic:playlist:%s", id));
+  json_object_object_add(owntone_playlist, "smart_playlist", json_object_new_boolean(false));
+  json_object_object_add(owntone_playlist, "folder", json_object_new_boolean(false));
+  json_object_object_add(owntone_playlist, "item_count", json_object_new_int(song_count));
+  json_object_object_add(owntone_playlist, "stream_count", json_object_new_int(0));
+  safe_json_add_string(owntone_playlist, "uri", safe_asprintf("opensubsonic:playlist:%s", id));
+  safe_json_add_string(owntone_playlist, "artwork_url", cover_art ? safe_asprintf("./artwork/opensubsonic/%s", cover_art) : NULL);
+  safe_json_add_string(owntone_playlist, "data_kind", "opensubsonic");
+
+  return owntone_playlist;
+}
+
+/*
+ * Endpoint to get playlists from OpenSubsonic server
+ */
+static int
+jsonapi_reply_opensubsonic_playlists(struct httpd_request *hreq)
+{
+  json_object *response;
+  json_object *subsonic_response;
+  json_object *playlists_obj;
+  json_object *playlist_array;
+  json_object *owntone_response;
+  json_object *owntone_playlists;
+  int i;
+
+  response = opensubsonic_request_playlists();
+  if (!response)
+    return HTTP_INTERNAL;
+
+  owntone_response = json_object_new_object();
+  owntone_playlists = json_object_new_array();
+
+  // Extract the playlists data from the OpenSubsonic response
+  if (json_object_object_get_ex(response, "subsonic-response", &subsonic_response) &&
+      json_object_object_get_ex(subsonic_response, "playlists", &playlists_obj) &&
+      json_object_object_get_ex(playlists_obj, "playlist", &playlist_array))
+    {
+      for (i = 0; i < json_object_array_length(playlist_array); i++)
+        {
+          json_object *os_playlist = json_object_array_get_idx(playlist_array, i);
+          json_object *owntone_playlist = opensubsonic_playlist_to_owntone(os_playlist);
+          json_object_array_add(owntone_playlists, owntone_playlist);
+        }
+    }
+
+  json_object_object_add(owntone_response, "items", owntone_playlists);
+  json_object_object_add(owntone_response, "total", json_object_new_int(json_object_array_length(owntone_playlists)));
+  json_object_object_add(owntone_response, "offset", json_object_new_int(0));
+  json_object_object_add(owntone_response, "limit", json_object_new_int(-1));
+
+  CHECK_ERRNO(L_WEB, evbuffer_add_printf(hreq->out_body, "%s", json_object_to_json_string(owntone_response)));
+
+  jparse_free(response);
+  jparse_free(owntone_response);
+  return HTTP_OK;
+}
+
+/*
+ * Endpoint to get playlist details from OpenSubsonic server
+ * URL: /api/opensubsonic/playlists/{id}
+ */
+static int
+jsonapi_reply_opensubsonic_playlist(struct httpd_request *hreq)
+{
+  json_object *response;
+  json_object *subsonic_response;
+  json_object *playlist_obj;
+  json_object *entry_array;
+  json_object *owntone_response;
+  json_object *owntone_tracks;
+  const char *playlist_id;
+  int i;
+
+  playlist_id = hreq->path_parts[3]; // /api/opensubsonic/playlists/{id}
+  if (!playlist_id)
+    return HTTP_BADREQUEST;
+
+  response = opensubsonic_request_playlist(playlist_id);
+  if (!response)
+    return HTTP_INTERNAL;
+
+  owntone_response = json_object_new_object();
+  owntone_tracks = json_object_new_array();
+
+  // Extract the playlist data from the OpenSubsonic response
+  if (json_object_object_get_ex(response, "subsonic-response", &subsonic_response) &&
+      json_object_object_get_ex(subsonic_response, "playlist", &playlist_obj))
+    {
+      // Add playlist info
+      const char *name = jparse_str_from_obj(playlist_obj, "name");
+      const char *owner = jparse_str_from_obj(playlist_obj, "owner");
+      const char *cover_art = jparse_str_from_obj(playlist_obj, "coverArt");
+      int song_count = jparse_int_from_obj(playlist_obj, "songCount");
+      int duration = jparse_int_from_obj(playlist_obj, "duration");
+
+      safe_json_add_string(owntone_response, "id", playlist_id);
+      safe_json_add_string(owntone_response, "name", name);
+      safe_json_add_string(owntone_response, "owner", owner);
+      safe_json_add_string(owntone_response, "path", safe_asprintf("opensubsonic:playlist:%s", playlist_id));
+      json_object_object_add(owntone_response, "smart_playlist", json_object_new_boolean(false));
+      json_object_object_add(owntone_response, "item_count", json_object_new_int(song_count));
+      json_object_object_add(owntone_response, "length_ms", json_object_new_int(duration * 1000));
+      safe_json_add_string(owntone_response, "artwork_url", cover_art ? safe_asprintf("./artwork/opensubsonic/%s", cover_art) : NULL);
+      safe_json_add_string(owntone_response, "data_kind", "opensubsonic");
+
+      // Convert tracks
+      if (json_object_object_get_ex(playlist_obj, "entry", &entry_array))
+        {
+          for (i = 0; i < json_object_array_length(entry_array); i++)
+            {
+              json_object *os_track = json_object_array_get_idx(entry_array, i);
+              json_object *owntone_track = opensubsonic_track_to_owntone(os_track, "playlist", playlist_id);
+              json_object_array_add(owntone_tracks, owntone_track);
+            }
+        }
+    }
+
+  json_object_object_add(owntone_response, "tracks", owntone_tracks);
+
+  CHECK_ERRNO(L_WEB, evbuffer_add_printf(hreq->out_body, "%s", json_object_to_json_string(owntone_response)));
+
+  jparse_free(response);
+  jparse_free(owntone_response);
+  return HTTP_OK;
+}
+
+/*
+ * Endpoint to search OpenSubsonic server
+ * URL: /api/opensubsonic/search?query={query}
+ */
+static int
+jsonapi_reply_opensubsonic_search(struct httpd_request *hreq)
+{
+  json_object *response;
+  json_object *subsonic_response;
+  json_object *search_obj;
+  json_object *artist_array, *album_array, *song_array;
+  json_object *owntone_response;
+  json_object *owntone_artists, *owntone_albums, *owntone_tracks;
+  const char *query;
+  int i;
+
+  query = evhttp_find_header(hreq->query, "query");
+  if (!query)
+    return HTTP_BADREQUEST;
+
+  response = opensubsonic_request_search(query);
+
+  owntone_response = json_object_new_object();
+  owntone_artists = json_object_new_array();
+  owntone_albums = json_object_new_array();
+  owntone_tracks = json_object_new_array();
+
+  // Extract the search results from the OpenSubsonic response
+  // Handle the case where response is NULL (empty response from server)
+  if (response && 
+      json_object_object_get_ex(response, "subsonic-response", &subsonic_response) &&
+      json_object_object_get_ex(subsonic_response, "searchResult3", &search_obj))
+    {
+      // Convert artists
+      if (json_object_object_get_ex(search_obj, "artist", &artist_array))
+        {
+          for (i = 0; i < json_object_array_length(artist_array); i++)
+            {
+              json_object *os_artist = json_object_array_get_idx(artist_array, i);
+              json_object *owntone_artist = opensubsonic_artist_to_owntone(os_artist);
+              json_object_array_add(owntone_artists, owntone_artist);
+            }
+        }
+
+      // Convert albums
+      if (json_object_object_get_ex(search_obj, "album", &album_array))
+        {
+          for (i = 0; i < json_object_array_length(album_array); i++)
+            {
+              json_object *os_album = json_object_array_get_idx(album_array, i);
+              json_object *owntone_album = opensubsonic_album_to_owntone(os_album);
+              json_object_array_add(owntone_albums, owntone_album);
+            }
+        }
+
+      // Convert songs
+      if (json_object_object_get_ex(search_obj, "song", &song_array))
+        {
+          for (i = 0; i < json_object_array_length(song_array); i++)
+            {
+              json_object *os_track = json_object_array_get_idx(song_array, i);
+              // Use album context for search results to maintain consistency
+              const char *album_id = jparse_str_from_obj(os_track, "albumId");
+              json_object *owntone_track = opensubsonic_track_to_owntone(os_track, "album", album_id);
+              json_object_array_add(owntone_tracks, owntone_track);
+            }
+        }
+    }
+
+  json_object_object_add(owntone_response, "artists", owntone_artists);
+  json_object_object_add(owntone_response, "albums", owntone_albums);
+  json_object_object_add(owntone_response, "tracks", owntone_tracks);
+  json_object_object_add(owntone_response, "query", json_object_new_string(query));
+
+  CHECK_ERRNO(L_WEB, evbuffer_add_printf(hreq->out_body, "%s", json_object_to_json_string(owntone_response)));
+
+  if (response)
+    jparse_free(response);
+  jparse_free(owntone_response);
+  return HTTP_OK;
+}
+
 static int
 jsonapi_reply_lastfm(struct httpd_request *hreq)
 {
@@ -1502,7 +2235,7 @@ static int
 jsonapi_reply_listenbrainz_token_delete(struct httpd_request *hreq)
 {
   int ret;
-  
+
   ret = listenbrainz_token_delete();
 
   if (ret < 0)
@@ -2311,6 +3044,136 @@ queue_item_to_json(struct db_queue_item *queue_item, char shuffle)
 }
 
 static int
+queue_tracks_add_opensubsonic_album(const char *album_id, char shuffle, uint32_t item_id, int pos, int *count, int *new_item_id)
+{
+  json_object *response;
+  json_object *subsonic_response;
+  json_object *album_obj;
+  json_object *song_array;
+  int i;
+  int total_added = 0;
+  int first_new_id = -1;
+  int ret;
+
+  *count = 0;
+  *new_item_id = -1;
+
+  response = opensubsonic_request_album(album_id);
+  if (!response)
+    {
+      DPRINTF(E_LOG, L_WEB, "Failed to get OpenSubsonic album '%s'\n", album_id);
+      return -1;
+    }
+
+  // Extract the album data from the OpenSubsonic response
+  if (json_object_object_get_ex(response, "subsonic-response", &subsonic_response) &&
+      json_object_object_get_ex(subsonic_response, "album", &album_obj))
+    {
+      // Convert tracks
+      if (json_object_object_get_ex(album_obj, "song", &song_array))
+        {
+          for (i = 0; i < json_object_array_length(song_array); i++)
+            {
+              json_object *os_track = json_object_array_get_idx(song_array, i);
+              const char *track_id = jparse_str_from_obj(os_track, "id");
+
+              if (track_id)
+                {
+                  char *track_uri = safe_asprintf("os:%s:a:%s", track_id, album_id);
+                  int track_count, track_new_id;
+
+                  ret = library_queue_item_add(track_uri, pos >= 0 ? pos + total_added : -1, shuffle, item_id, &track_count, &track_new_id);
+                  free(track_uri);
+
+                  if (ret == LIBRARY_OK)
+                    {
+                      total_added += track_count;
+                      if (first_new_id == -1)
+                        first_new_id = track_new_id;
+                    }
+                  else
+                    {
+                      DPRINTF(E_WARN, L_WEB, "Failed to add track '%s' from OpenSubsonic album '%s'\n", track_id, album_id);
+                    }
+                }
+            }
+        }
+    }
+
+  jparse_free(response);
+
+  *count = total_added;
+  *new_item_id = first_new_id;
+
+  return total_added > 0 ? 0 : -1;
+}
+
+static int
+queue_tracks_add_opensubsonic_playlist(const char *playlist_id, char shuffle, uint32_t item_id, int pos, int *count, int *new_item_id)
+{
+  json_object *response;
+  json_object *subsonic_response;
+  json_object *playlist_obj;
+  json_object *entry_array;
+  int i;
+  int total_added = 0;
+  int first_new_id = -1;
+  int ret;
+
+  *count = 0;
+  *new_item_id = -1;
+
+  response = opensubsonic_request_playlist(playlist_id);
+  if (!response)
+    {
+      DPRINTF(E_LOG, L_WEB, "Failed to get OpenSubsonic playlist '%s'\n", playlist_id);
+      return -1;
+    }
+
+  // Extract the playlist data from the OpenSubsonic response
+  if (json_object_object_get_ex(response, "subsonic-response", &subsonic_response) &&
+      json_object_object_get_ex(subsonic_response, "playlist", &playlist_obj))
+    {
+      // Convert tracks
+      if (json_object_object_get_ex(playlist_obj, "entry", &entry_array))
+        {
+          for (i = 0; i < json_object_array_length(entry_array); i++)
+            {
+              json_object *os_track = json_object_array_get_idx(entry_array, i);
+              const char *track_id = jparse_str_from_obj(os_track, "id");
+
+              if (track_id)
+                {
+                  char *track_uri = safe_asprintf("os:%s:p:%s", track_id, playlist_id);
+                  int track_count, track_new_id;
+
+                  ret = library_queue_item_add(track_uri, pos >= 0 ? pos + total_added : -1, shuffle, item_id, &track_count, &track_new_id);
+                  free(track_uri);
+
+                  if (ret == LIBRARY_OK)
+                    {
+                      total_added += track_count;
+                      if (first_new_id == -1)
+                        first_new_id = track_new_id;
+                    }
+                  else
+                    {
+                      DPRINTF(E_WARN, L_WEB, "Failed to add track '%s' from OpenSubsonic playlist '%s'\n", track_id, playlist_id);
+                    }
+                }
+            }
+        }
+    }
+
+  jparse_free(response);
+
+  *count = total_added;
+  *new_item_id = first_new_id;
+
+  return total_added > 0 ? 0 : -1;
+}
+
+static int
 queue_tracks_add_byuris(const char *param, char shuffle, uint32_t item_id, int pos, int *total_count, int *new_item_id)
 {
   char *uris;
@@ -2334,12 +3197,37 @@ queue_tracks_add_byuris(const char *param, char shuffle, uint32_t item_id, int p
 
   for (; uri; uri = strtok_r(NULL, ",", &ptr))
     {
-      ret = library_queue_item_add(uri, pos, shuffle, item_id, &count, &new);
-      if (ret != LIBRARY_OK)
-	{
-	  DPRINTF(E_LOG, L_WEB, "Invalid uri '%s'\n", uri);
-	  goto error;
-	}
+      // Handle OpenSubsonic album and playlist URIs
+      if (strncmp(uri, "os:album:", 9) == 0)
+        {
+          const char *album_id = uri + 9;
+          ret = queue_tracks_add_opensubsonic_album(album_id, shuffle, item_id, pos, &count, &new);
+          if (ret < 0)
+            {
+              DPRINTF(E_LOG, L_WEB, "Failed to add OpenSubsonic album '%s'\n", album_id);
+              goto error;
+            }
+        }
+      else if (strncmp(uri, "os:playlist:", 12) == 0)
+        {
+          const char *playlist_id = uri + 12;
+          ret = queue_tracks_add_opensubsonic_playlist(playlist_id, shuffle, item_id, pos, &count, &new);
+          if (ret < 0)
+            {
+              DPRINTF(E_LOG, L_WEB, "Failed to add OpenSubsonic playlist '%s'\n", playlist_id);
+              goto error;
+            }
+        }
+      else
+        {
+          // Handle regular URIs
+          ret = library_queue_item_add(uri, pos, shuffle, item_id, &count, &new);
+          if (ret != LIBRARY_OK)
+            {
+              DPRINTF(E_LOG, L_WEB, "Invalid uri '%s'\n", uri);
+              goto error;
+            }
+        }
 
       *total_count += count;
       if (pos >= 0)
@@ -4670,6 +5558,14 @@ static struct httpd_uri_map adm_handlers[] =
     { HTTPD_METHOD_PUT,    "^/api/rescan$",                                jsonapi_reply_meta_rescan },
     { HTTPD_METHOD_GET,    "^/api/spotify-logout$",                        jsonapi_reply_spotify_logout },
     { HTTPD_METHOD_GET,    "^/api/spotify$",                               jsonapi_reply_spotify },
+    { HTTPD_METHOD_GET,    "^/api/opensubsonic$",                          jsonapi_reply_opensubsonic },
+    { HTTPD_METHOD_GET,    "^/api/opensubsonic/artists$",                  jsonapi_reply_opensubsonic_artists },
+    { HTTPD_METHOD_GET,    "^/api/opensubsonic/artists/[^/]+$",            jsonapi_reply_opensubsonic_artist },
+    { HTTPD_METHOD_GET,    "^/api/opensubsonic/albums$",                   jsonapi_reply_opensubsonic_albums },
+    { HTTPD_METHOD_GET,    "^/api/opensubsonic/albums/[^/]+$",             jsonapi_reply_opensubsonic_album },
+    { HTTPD_METHOD_GET,    "^/api/opensubsonic/playlists$",                jsonapi_reply_opensubsonic_playlists },
+    { HTTPD_METHOD_GET,    "^/api/opensubsonic/playlists/[^/]+$",          jsonapi_reply_opensubsonic_playlist },
+    { HTTPD_METHOD_GET,    "^/api/opensubsonic/search$",                   jsonapi_reply_opensubsonic_search },
     { HTTPD_METHOD_GET,    "^/api/pairing$",                               jsonapi_reply_pairing_get },
     { HTTPD_METHOD_POST,   "^/api/pairing$",                               jsonapi_reply_pairing_pair },
     { HTTPD_METHOD_POST,   "^/api/lastfm-login$",                          jsonapi_reply_lastfm_login },

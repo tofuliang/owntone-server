@@ -137,6 +137,7 @@ enum data_kind {
   DATA_KIND_HTTP = 1,    /* network stream (radio) */
   DATA_KIND_SPOTIFY = 2, /* iTunes has no spotify data kind, but we use 2 */
   DATA_KIND_PIPE = 3,    /* iTunes has no pipe data kind, but we use 3 */
+  DATA_KIND_OPENSUBSONIC = 4, /* OpenSubsonic data kind, we use 4 */
 };
 
 const char *
@@ -147,6 +148,7 @@ enum scan_kind {
   SCAN_KIND_FILES = 1,
   SCAN_KIND_SPOTIFY = 2,
   SCAN_KIND_RSS = 3,
+  SCAN_KIND_OPENSUBSONIC = 4,
 };
 
 const char *

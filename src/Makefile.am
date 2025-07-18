@@ -89,6 +89,8 @@ owntone_SOURCES = main.c \
 	library/filescanner_ffmpeg.c library/filescanner_playlist.c \
 	library/filescanner_smartpl.c library/filescanner_itunes.c \
 	library/rssscanner.c \
+	library/opensubsonic_webapi.c library/opensubsonic_webapi.h \
+	library/opensubsonic_cache.c library/opensubsonic_cache.h \
 	library.c library.h \
 	$(MDNS_SRC) mdns.h \
 	remote_pairing.c remote_pairing.h \
@@ -115,6 +117,7 @@ owntone_SOURCES = main.c \
 	settings.c settings.h \
 	input.h input.c \
 	inputs/file.c inputs/http.c inputs/pipe.c inputs/timer.c \
+	inputs/opensubsonic.c inputs/opensubsonic.h inputs/opensubsonic_input.c \
 	outputs.h outputs.c \
 	outputs/rtp_common.h outputs/rtp_common.c \
 	outputs/raop.c outputs/airplay.c $(PAIR_AP_SRC) \

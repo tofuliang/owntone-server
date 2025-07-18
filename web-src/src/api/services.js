@@ -1,6 +1,11 @@
 import api from '@/api'
 
 export default {
+  // OpenSubsonic service
+  opensubsonic() {
+    return api.get('/api/opensubsonic')
+  },
+
   lastfm() {
     return api.get('./api/lastfm')
   },

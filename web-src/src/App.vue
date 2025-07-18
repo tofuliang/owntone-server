@@ -80,6 +80,7 @@ export default {
     this.handlers = {
       database: [this.libraryStore.initialise],
       lastfm: [this.servicesStore.initialiseLastfm],
+      opensubsonic: [this.servicesStore.initialiseOpensubsonic],
       options: [this.playerStore.initialise],
       outputs: [this.outputsStore.initialise],
       pairing: [this.remotesStore.initialise],
@@ -155,6 +156,7 @@ export default {
       const events = [
         'database',
         'lastfm',
+        'opensubsonic',
         'options',
         'outputs',
         'pairing',

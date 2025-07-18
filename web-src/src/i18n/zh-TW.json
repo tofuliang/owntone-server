@@ -130,6 +130,7 @@
     "files": "文件",
     "genres": "音樂類型",
     "music": "音樂",
+    "opensubsonic": "OpenSubsonic",
     "playlists": "播放列表",
     "podcasts": "Podcast",
     "radio": "電台",
@@ -210,6 +211,7 @@
         "composers": "作曲家",
         "genres": "音樂類型",
         "history": "歷史",
+        "opensubsonic": "OpenSubsonic",
         "spotify": "Spotify"
       }
     },
@@ -267,6 +269,54 @@
       "music": {
         "featured-playlists": "特色列表",
         "new-releases": "最新發行"
+      }
+    },
+    "opensubsonic": {
+      "connect": {
+        "title": "連接到 OpenSubsonic 伺服器",
+        "server_url": "伺服器地址",
+        "server_url_placeholder": "http://your-server:4533",
+        "username": "使用者名稱",
+        "username_placeholder": "使用者名稱",
+        "password": "密碼",
+        "password_placeholder": "密碼",
+        "button": "連接"
+      },
+      "status": {
+        "not_available": "OpenSubsonic 服務不可用。",
+        "loading": "正在載入 OpenSubsonic 資料...",
+        "connected": "已連接到 {server}",
+        "error": "連接失敗：{error}"
+      },
+      "tabs": {
+        "artists": "藝人",
+        "albums": "專輯",
+        "playlists": "播放清單",
+        "search": "搜尋"
+      },
+      "artists": {
+        "empty": "未找到藝人。",
+        "album_count": "{count} 張專輯"
+      },
+      "albums": {
+        "empty": "未找到專輯。",
+        "by_artist": "by {artist}"
+      },
+      "playlists": {
+        "empty": "未找到播放清單。",
+        "track_count": "{count} 首歌曲",
+        "by_owner": "by {owner}"
+      },
+      "search": {
+        "placeholder": "搜尋藝人、專輯或歌曲...",
+        "artists": "藝人",
+        "albums": "專輯",
+        "songs": "歌曲",
+        "no_results": "未找到搜尋結果"
+      },
+      "back": "返回",
+      "artist": {
+        "albums": "專輯"
       }
     }
   },

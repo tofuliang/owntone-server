@@ -37,6 +37,9 @@ struct http_client_ctx
 
   /* HTTP Response code */
   int response_code;
+
+  /* Custom timeout in seconds (0 = use default) */
+  int timeout;
 };
 
 struct http_icy_metadata

@@ -20,9 +20,20 @@ export const useServicesStore = defineStore('ServicesStore', {
           )
         }
       })
+    },
+    async initialiseOpensubsonic() {
+      try {
+        const response = await services.opensubsonic()
+        this.opensubsonic = response.data || response
+      } catch (error) {
+        console.error('Failed to initialize OpenSubsonic:', error)
+        this.opensubsonic = { enabled: false, connected: false }
+      }
     }
   },
   getters: {
+    isOpensubsonicActive: (state) => state.opensubsonic?.connected,
+    isOpensubsonicEnabled: (state) => state.opensubsonic?.enabled,
     grantedSpotifyScopes: (state) =>
       state.spotify.webapi_granted_scope?.split(' ') ?? [],
     hasMissingSpotifyScopes: (state) => state.missingSpotifyScopes.length > 0,
@@ -41,5 +52,5 @@ export const useServicesStore = defineStore('ServicesStore', {
     requiredSpotifyScopes: (state) =>
       state.spotify.webapi_required_scope?.split(' ') ?? []
   },
-  state: () => ({ lastfm: {}, spotify: {}, spotifyTimerId: 0 })
+  state: () => ({ lastfm: {}, spotify: {}, opensubsonic: {}, spotifyTimerId: 0 })
 })
