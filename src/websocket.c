@@ -20,6 +20,7 @@
 # include <config.h>
 #endif
 
+#include <event2/event.h>
 #include <json.h>
 #include <libwebsockets.h>
 #include <pthread.h>
@@ -47,11 +48,76 @@ static pthread_mutex_t websocket_write_event_lock;
 // Event mask of events processed by the writeable callback
 static short websocket_write_events;
 
+// Queue event throttling mechanism
+static pthread_mutex_t queue_event_lock;
+static int queue_event_count = 0;
+static time_t last_queue_event = 0;
+
+
+/* Send throttled queue event */
+static void
+send_throttled_queue_event_ws(void)
+{
+  DPRINTF(E_DBG, L_WEB, "Sending throttled QUEUE event via websocket (count: %d)\n", queue_event_count);
+  
+  if (!websocket_context)
+    {
+      DPRINTF(E_WARN, L_WEB, "Cannot send queue event - websocket context is NULL\n");
+      return;
+    }
+  
+  pthread_mutex_lock(&websocket_write_event_lock);
+  websocket_write_events |= LISTENER_QUEUE;
+  pthread_mutex_unlock(&websocket_write_event_lock);
+  
+  lws_cancel_service(websocket_context);
+}
 
 /* Thread: library, player, etc. (the thread the event occurred) */
 static void
 listener_cb(short event_mask, void *ctx)
 {
+  // Safety check for websocket context
+  if (!websocket_context)
+    {
+      DPRINTF(E_WARN, L_WEB, "Websocket listener callback called but context is NULL\n");
+      return;
+    }
+
+  // Special handling for QUEUE events to throttle them
+  if (event_mask & LISTENER_QUEUE)
+    {
+      pthread_mutex_lock(&queue_event_lock);
+      
+      time_t now = time(NULL);
+      queue_event_count++;
+      
+      // Send event if: more than 2 second passed OR accumulated 50+ events
+      if (now > last_queue_event + 2 || queue_event_count >= 50)
+        {
+          DPRINTF(E_DBG, L_WEB, "Sending throttled queue event via websocket (count: %d, time_diff: %ld)\n", 
+                  queue_event_count, now - last_queue_event);
+          
+          send_throttled_queue_event_ws();
+          last_queue_event = now;
+          queue_event_count = 0;
+        }
+      else
+        {
+          DPRINTF(E_DBG, L_WEB, "Throttling queue event via websocket (count: %d, time_diff: %ld)\n", 
+                  queue_event_count, now - last_queue_event);
+        }
+      
+      pthread_mutex_unlock(&queue_event_lock);
+      
+      // Remove QUEUE from the immediate event mask (already handled)
+      event_mask &= ~LISTENER_QUEUE;
+    }
+
+  // Handle other events immediately
+  if (event_mask == 0)
+    return;
+    
   pthread_mutex_lock(&websocket_write_event_lock);
   websocket_write_events |= event_mask;
   pthread_mutex_unlock(&websocket_write_event_lock);
@@ -418,6 +484,12 @@ websocket(void *arg)
   listener_add(listener_cb, LISTENER_UPDATE | LISTENER_DATABASE | LISTENER_PAIRING | LISTENER_SPOTIFY | LISTENER_LASTFM | LISTENER_SPEAKER
                | LISTENER_PLAYER | LISTENER_OPTIONS | LISTENER_VOLUME | LISTENER_QUEUE, NULL);
 
+  // Initialize queue event throttling
+  queue_event_count = 0;
+  last_queue_event = 0;
+  
+  DPRINTF(E_LOG, L_WEB, "Queue event throttling initialized for websocket (max 1 event/3sec or 50 events)\n");
+
   while(!websocket_exit)
   {
 #if LWS_LIBRARY_VERSION_MAJOR >= 3
@@ -524,16 +596,30 @@ websocket_init(void)
       return -1;
     }
 
-  ret = pthread_create(&tid_websocket, NULL, websocket, NULL);
+  ret = mutex_init(&queue_event_lock);
   if (ret < 0)
     {
-      DPRINTF(E_LOG, L_WEB, "Could not spawn websocket thread (%d): %s\n", ret, strerror(ret));
+      DPRINTF(E_LOG, L_WEB, "Failed to initialize queue event mutex: %s\n", strerror(ret));
       pthread_mutex_destroy(&websocket_write_event_lock);
       lws_context_destroy(websocket_context);
       return -1;
     }
 
+  ret = pthread_create(&tid_websocket, NULL, websocket, NULL);
+  if (ret < 0)
+    {
+      DPRINTF(E_LOG, L_WEB, "Could not spawn websocket thread (%d): %s\n", ret, strerror(ret));
+      pthread_mutex_destroy(&websocket_write_event_lock);
+      pthread_mutex_destroy(&queue_event_lock);
+      lws_context_destroy(websocket_context);
+      return -1;
+    }
+
   thread_setname(tid_websocket, "websocket");
+
+  // Initialize queue event throttling state
+  queue_event_count = 0;
+  last_queue_event = 0;
 
   websocket_is_initialized = true;
 
@@ -557,4 +643,5 @@ websocket_deinit(void)
 
   lws_context_destroy(websocket_context);
   pthread_mutex_destroy(&websocket_write_event_lock);
+  pthread_mutex_destroy(&queue_event_lock);
 }

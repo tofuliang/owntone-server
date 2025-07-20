@@ -638,7 +638,15 @@ POST /api/queue/items/add
 | shuffle         | *(Optional)* If the `shuffle` parameter is set to `true`, the shuffle mode is activated. If it is set to something else, the shuffle mode is deactivated. To leave the shuffle mode untouched the parameter should be omitted.    |
 | limit           | *(Optional)* Maximum number of tracks to add |
 
-Either the `uris` or the `expression` parameter must be set. If both are set the `uris` parameter takes precedence and the `expression` parameter will be ignored.
+**POST body (JSON)**
+
+As an alternative to query parameters, you can send the `uris` parameter in the POST body as JSON. This is particularly useful when adding a large number of items (>50) to avoid URL length limitations.
+
+| Parameter       | Value                                                       |
+| --------------- | ----------------------------------------------------------- |
+| uris            | Comma separated list of resource identifiers (`track`, `playlist`, `artist` or `album` object `uri`)           |
+
+Either the `uris` (in query parameters or POST body) or the `expression` parameter must be set. If both are set the `uris` parameter takes precedence and the `expression` parameter will be ignored. If `uris` is provided in both query parameters and POST body, the query parameter takes precedence.
 
 **Response**
 
@@ -652,7 +660,7 @@ On success returns the HTTP `200 OK` success status response code.
 
 **Example**
 
-Add new items by uri:
+Add new items by uri (query parameter method):
 
 ```shell
 curl -X POST "http://localhost:3689/api/queue/items/add?uris=library:playlist:68,library:artist:2932599850102967727"
@@ -683,6 +691,33 @@ curl -X POST "http://localhost:3689/api/queue/items/add?uris=library:playlist:68
       "data_kind": "file",
       "path": "/music/srv/The xx/Coexist/01 Angels.mp3",
       "uri": "library:track:10749"
+    },
+    ...
+  ]
+}
+```
+
+Add new items by uri (POST body method for large lists):
+
+```shell
+curl -X POST "http://localhost:3689/api/queue/items/add" \
+     -H "Content-Type: application/json" \
+     -d '{"uris":"library:playlist:68,library:artist:2932599850102967727,library:track:1,library:track:2"}'
+```
+
+```json
+{
+  "version": 834,
+  "count": 25,
+  "items": [
+    {
+      "id": 12123,
+      "position": 0,
+      "track_id": 10750,
+      "title": "Example Track",
+      "artist": "Example Artist",
+      "album": "Example Album",
+      "uri": "library:track:10750"
     },
     ...
   ]

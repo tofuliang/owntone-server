@@ -755,7 +755,6 @@ opensubsonic_request_playlist(const char *id)
     if (response)
     {
         opensubsonic_cache_put(OPENSUBSONIC_CACHE_PLAYLIST, id, response);
-        DPRINTF(E_DBG, L_OPENSUBSONIC, "Cached playlist details for ID: %s\n", id);
     }
 
     return response;
@@ -1019,6 +1018,12 @@ opensubsonic_webapi_library_queue_item_add(const char *uri, int position, char r
   const char *playlist_id = NULL;
   int duration = 0;
   int ret;
+
+  if (!uri)
+    {
+      DPRINTF(E_LOG, L_OPENSUBSONIC, "Invalid URI provided to queue_item_add\n");
+      return LIBRARY_PATH_INVALID;
+    }
 
   DPRINTF(E_DBG, L_OPENSUBSONIC, "Adding opensubsonic item to queue: %s\n", uri);
 

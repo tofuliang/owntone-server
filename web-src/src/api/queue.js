@@ -26,7 +26,33 @@ export default {
     return this.add({ expression }, next)
   },
   addUri(uris, next = false) {
-    return this.add({ uris }, next)
+    // Count the number of URIs by splitting on comma
+    const uriCount = uris ? uris.split(',').length : 0
+    
+    // If more than 50 URIs, use POST body instead of query parameters
+    if (uriCount > 50) {
+      const params = {}
+      if (next) {
+        const { current } = useQueueStore()
+        if (current?.id) {
+          params.position = current.position + 1
+        }
+      }
+      
+      // Send uris in POST body as JSON
+      const data = api.post(`${BASE_URL}/items/add`, { uris }, { params })
+      data.then((result) => {
+        useNotificationsStore().add({
+          text: t('server.appended-tracks', { count: result.count }),
+          timeout: 2000,
+          type: 'info'
+        })
+      })
+      return data
+    } else {
+      // Use original method for 50 or fewer URIs
+      return this.add({ uris }, next)
+    }
   },
   clear() {
     return api.put(`${BASE_URL}/clear`)
@@ -47,14 +73,24 @@ export default {
     return api.post(`${BASE_URL}/items/add`, null, { params })
   },
   playUri(uris, shuffle, position) {
-    const params = {
+    // Count the number of URIs by splitting on comma
+    const uriCount = uris ? uris.split(',').length : 0
+    
+    const baseParams = {
       clear: 'true',
       playback: 'start',
       playback_from_position: position,
-      shuffle,
-      uris
+      shuffle
     }
-    return api.post(`${BASE_URL}/items/add`, null, { params })
+    
+    // If more than 50 URIs, use POST body instead of query parameters
+    if (uriCount > 50) {
+      return api.post(`${BASE_URL}/items/add`, { uris }, { params: baseParams })
+    } else {
+      // Use original method for 50 or fewer URIs
+      const params = { ...baseParams, uris }
+      return api.post(`${BASE_URL}/items/add`, null, { params })
+    }
   },
   remove(id) {
     return api.delete(`${BASE_URL}/items/${id}`)

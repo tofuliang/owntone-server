@@ -3332,6 +3332,9 @@ jsonapi_reply_queue_tracks_add(struct httpd_request *hreq)
   int total_count = 0;
   int new_item_id = 0;
   int ret = 0;
+  json_object *request = NULL;
+  json_object *uris_obj = NULL;
+  const char *body_uris = NULL;
 
 
   param_pos = httpd_query_value_find(hreq->query, "position");
@@ -3352,10 +3355,37 @@ jsonapi_reply_queue_tracks_add(struct httpd_request *hreq)
   param_uris = httpd_query_value_find(hreq->query, "uris");
   param_expression = httpd_query_value_find(hreq->query, "expression");
 
+  // If uris not found in query parameters, try to get it from POST body
+  if (!param_uris && hreq->in_body && evbuffer_get_length(hreq->in_body) > 0)
+    {
+      size_t body_len = evbuffer_get_length(hreq->in_body);
+      char *body_data = malloc(body_len + 1);
+      if (body_data)
+        {
+          evbuffer_copyout(hreq->in_body, body_data, body_len);
+          body_data[body_len] = '\0';
+          
+          request = json_tokener_parse(body_data);
+          if (request && json_object_is_type(request, json_type_object))
+            {
+              if (json_object_object_get_ex(request, "uris", &uris_obj))
+                {
+                  if (json_object_is_type(uris_obj, json_type_string))
+                    {
+                      body_uris = json_object_get_string(uris_obj);
+                      param_uris = body_uris;
+                    }
+                }
+            }
+          free(body_data);
+        }
+    }
+
   if (!param_uris && !param_expression)
     {
       DPRINTF(E_LOG, L_WEB, "Missing query parameter 'uris' or 'expression'\n");
-
+      if (request)
+        json_object_put(request);
       return HTTP_BADREQUEST;
     }
 
@@ -3395,7 +3425,15 @@ jsonapi_reply_queue_tracks_add(struct httpd_request *hreq)
 
   ret = create_reply_queue_tracks_add(hreq->out_body, total_count, new_item_id, status.shuffle);
   if (ret < 0)
-    return HTTP_INTERNAL;
+    {
+      if (request)
+        json_object_put(request);
+      return HTTP_INTERNAL;
+    }
+
+  // Clean up JSON object if it was created
+  if (request)
+    json_object_put(request);
 
   // If query parameter "playback" is "start", start playback after successfully adding new items
   param = httpd_query_value_find(hreq->query, "playback");
